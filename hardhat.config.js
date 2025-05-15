@@ -1,8 +1,7 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
-// Load tasks
-require("./tasks");
+require("./tasks/query-ponds");
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
