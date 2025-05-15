@@ -33,6 +33,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     error StandardPondNotRemovable();
     error CannotRemovePondWithActivity();
     error FeeToHigh();
+    error InvalidParameters();
 
     // Roles
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -749,29 +750,6 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Emergency withdraw of native currency
-     */
-    function emergencyWithdraw() external onlyRole(ADMIN_ROLE) {
-        uint256 amount = address(this).balance;
-        (bool success, ) = msg.sender.call{value: amount}("");
-        if (!success) revert TransferFailed();
-        
-        emit EmergencyAction("withdraw", msg.sender, address(0), amount, bytes32(0));
-    }
-
-    /**
-     * @dev Emergency withdraw of ERC20 tokens
-     * @param _token The ERC20 token to withdraw
-     */
-    function emergencyWithdrawTokens(address _token) external onlyRole(ADMIN_ROLE) {
-        IERC20 token = IERC20(_token);
-        uint256 balance = token.balanceOf(address(this));
-        token.safeTransfer(msg.sender, balance);
-        
-        emit EmergencyAction("tokenWithdraw", msg.sender, _token, balance, bytes32(0));
-    }
-
-    /**
      * @dev Emergency reset of a pond
      * @param _pondType The pond type to reset
      */
@@ -783,6 +761,59 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         _resetPond(_pondType);
         
         emit EmergencyAction("pondReset", address(0), address(0), 0, _pondType);
+    }
+
+    function emergencyRefundBatch(bytes32 _pondType, uint256 _startIdx, uint256 _endIdx) external onlyRole(ADMIN_ROLE) nonReentrant {
+        Pond storage pond = ponds[_pondType];
+        
+        // Check if pond existss
+        if (pond.endTime == 0) revert InvalidPondType();
+        
+        // Get participants array
+        address[] storage allParticipants = participantsList[_pondType];
+        uint256 totalParticipants = allParticipants.length;
+        
+        // Validate batch indices
+        if (_startIdx >= totalParticipants) revert InvalidParameters();
+        if (_endIdx > totalParticipants) _endIdx = totalParticipants;
+        if (_startIdx >= _endIdx) revert InvalidParameters();
+        
+        uint256 totalPondValue = pond.totalValue;
+        
+        // Process the batch of participants
+        for (uint i = _startIdx; i < _endIdx; i++) {
+            address participant = allParticipants[i];
+            uint256 participantAmount = participants[_pondType][participant].amount;
+            
+            if (participantAmount > 0) {
+                // Calculate proportional refund
+                uint256 refundAmount = (participantAmount * totalPondValue) / pond.totalFrogValue;
+                
+                // Process the refund based on token type
+                if (pond.tokenType == TokenType.NATIVE) {
+                    // Send native tokens
+                    (bool success, ) = participant.call{value: refundAmount}("");
+                    if (!success) continue; // Skip if transfer fails, continue with others
+                } else if (pond.tokenType == TokenType.ERC20) {
+                    // Send ERC20 tokens
+                    IERC20 token = IERC20(pond.tokenAddress);
+                    try token.transfer(participant, refundAmount) {
+                        // Transfer successful
+                    } catch {
+                        // Skip if transfer fails, continue with others
+                        continue;
+                    }
+                }
+                
+                emit EmergencyAction("refund", participant, pond.tokenAddress, refundAmount, _pondType);
+            }
+        }
+        
+        // If this is the last batch, mark as fully processed
+        if (_endIdx == totalParticipants) {
+            pond.prizeDistributed = true;
+            _resetPond(_pondType);
+        }
     }
 
     // =========== View Functions ===========
