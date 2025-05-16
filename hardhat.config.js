@@ -2,6 +2,7 @@ require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
 require("./tasks/query-ponds");
+require("./tasks/simulate-tosses");
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {

@@ -180,7 +180,7 @@ task("query-ponds", "Query all ponds in the system")
 					const pondData = {
 						name: status[0],
 						type: "Custom",
-						typeHash: pondType.slice(0, 8) + "...", // Truncated hash
+						typeHash: `${pondType.slice(0, 8)}...`, // Truncated hash
 						startTime: Number(status[1]),
 						endTime: Number(status[2]),
 						totalTosses: Number(status[3]),

@@ -100,10 +100,10 @@ async function main() {
 
 	// Define gas limits for complex contracts (customize as needed)
 	const GAS_LIMITS = {
-		FEE_DISTRIBUTOR: 20000000,
-		POND_CORE: 20000000,
-		POND_FACTORY: 20000000,
-		GRANT_ROLE: 1000000,
+		FEE_DISTRIBUTOR: 10000000,
+		POND_CORE: 10000000,
+		POND_FACTORY: 10000000,
+		GRANT_ROLE: 10000000,
 		CREATE_PONDS: 20000000,
 	};
 
@@ -280,15 +280,6 @@ async function main() {
 		try {
 			const PondFactory = await ethers.getContractFactory("PondFactory");
 
-			console.log(
-				`🔍 Checking factory bytecode size: ${PondFactory.bytecode.length} bytes`,
-			);
-
-			// Deploy with even higher gas limit
-			console.log(
-				`⚠️ Using higher gas limit (${GAS_LIMITS.POND_FACTORY.toLocaleString()}) for PondFactory deployment...`,
-			);
-
 			const pondFactory = await PondFactory.deploy(pondCoreAddress, {
 				gasLimit: GAS_LIMITS.POND_FACTORY,
 			});
@@ -325,203 +316,198 @@ async function main() {
 				`✅ Granted FACTORY_ROLE to PondFactory: ${pondFactoryAddress}`,
 			);
 
-			// 5. Create standard ponds if enabled
-			if (createStandardPonds) {
-				console.log("\n5️⃣ Creating standard ponds...");
+			// 5. Save deployment information
+			const deployDir = path.join(__dirname, "../deployments");
+			if (!fs.existsSync(deployDir)) {
+				fs.mkdirSync(deployDir, { recursive: true });
+			}
 
-				// Define pond periods to create (all standard periods)
-				const pondPeriods = [0, 1, 2, 3, 4]; // Five-min, Hourly, Daily, Weekly, Monthly
+			const timestamp = Math.floor(Date.now() / 1000);
+			const deploymentPath = path.join(
+				deployDir,
+				`${networkName}_${timestamp}.json`,
+			);
 
-				// Create native ETH ponds
-				console.log("🌊 Creating native ETH ponds...");
+			fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
+			console.log(`\n💾 Deployment information saved to: ${deploymentPath}`);
+
+			// Output important addresses
+			console.log("\n=== 🚀 DEPLOYMENT SUMMARY 🚀 ===");
+			console.log(`🌐 Network: ${networkName}`);
+			console.log(`💼 PondFeeDistributor: ${feeDistributorAddress}`);
+			console.log(`🌟 PondCore: ${pondCoreAddress}`);
+			if (deploymentInfo.pondFactory) {
+				console.log(`🏭 PondFactory: ${deploymentInfo.pondFactory}`);
+			} else {
+				console.log("🔴 PondFactory: DEPLOYMENT FAILED");
+			}
+			console.log("==========================");
+
+			// Update the .env file with the deployed contract addresses
+			console.log("\n📝 Update your .env file with these values:");
+			if (!existingDistributorAddress) {
+				console.log(
+					`${configPrefix}_DISTRIBUTOR_ADDRESS=${feeDistributorAddress}`,
+				);
+			}
+			if (!existingPondCoreAddress) {
+				console.log(`${configPrefix}_POND_CORE_ADDRESS=${pondCoreAddress}`);
+			}
+			if (deploymentInfo.pondFactory) {
+				console.log(
+					`${configPrefix}_POND_FACTORY_ADDRESS=${deploymentInfo.pondFactory}`,
+				);
+			}
+		} catch (error) {
+			console.error("\n❌ Error during deployment:");
+			console.error(error);
+
+			// Try to get more detailed error information
+			if (error.transaction) {
+				console.log("\n🔍 Transaction that caused the error:");
+				console.log(error.transaction);
 
 				try {
-					// Create ponds with high gas limit
-					const tx2 = await pondFactory.createStandardPonds(
-						ethers.ZeroAddress, // Native ETH
-						"ETH",
-						minTossPrice,
-						maxTotalTossAmount,
-						pondPeriods,
-						{
-							gasLimit: GAS_LIMITS.CREATE_PONDS,
-						},
+					// Try to get transaction receipt for more details
+					const receipt = await ethers.provider.getTransactionReceipt(
+						error.transactionHash,
 					);
-
-					console.log(`📤 Create standard ponds transaction sent: ${tx2.hash}`);
-					await tx2.wait();
-					console.log("✅ ETH ponds created successfully");
-				} catch (error) {
-					console.error(`❌ Failed to create ETH ponds: ${error.message}`);
-					// Continue with other tokens even if ETH ponds fail
-				}
-
-				// Create ERC20 token ponds if any tokens are specified
-				const defaultTokensEnv = process.env[`${configPrefix}_DEFAULT_TOKENS`];
-				if (defaultTokensEnv) {
-					const defaultTokens = defaultTokensEnv.split(",");
+					console.log("\n🧾 Transaction receipt:");
+					console.log(receipt);
+				} catch (receiptError) {
 					console.log(
-						`🪙 Found ${defaultTokens.length} tokens to set up ponds for`,
+						"❌ Could not get transaction receipt:",
+						receiptError.message,
 					);
+				}
+			}
 
-					for (const tokenAddress of defaultTokens) {
-						// Get token symbol (try with error handling)
-						let symbol = "TOKEN";
-						try {
-							const tokenContract = await ethers.getContractAt(
-								"IERC20Metadata",
-								tokenAddress,
-							);
-							symbol = await tokenContract.symbol();
-						} catch (error) {
-							console.warn(
-								`⚠️ Could not get symbol for token ${tokenAddress}, using default`,
-							);
-						}
+			// Save partial deployment info
+			const deployDir = path.join(__dirname, "../deployments");
+			if (!fs.existsSync(deployDir)) {
+				fs.mkdirSync(deployDir, { recursive: true });
+			}
 
-						console.log(`🪙 Creating ponds for ${symbol} (${tokenAddress})...`);
+			const timestamp = Math.floor(Date.now() / 1000);
+			const deploymentPath = path.join(
+				deployDir,
+				`${networkName}_${timestamp}_partial.json`,
+			);
 
-						try {
-							// Register token with high gas limit
-							const tx3 = await pondFactory.addSupportedToken(
-								tokenAddress,
-								symbol,
-								{
-									gasLimit: GAS_LIMITS.GRANT_ROLE,
-								},
-							);
+			deploymentInfo.error = {
+				message: error.message,
+				stack: error.stack,
+			};
 
-							console.log(`📤 Register token transaction sent: ${tx3.hash}`);
-							await tx3.wait();
+			fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
+			console.log(
+				`\n💾 Partial deployment information saved to: ${deploymentPath}`,
+			);
 
-							// Create token ponds with high gas limit
-							const tx4 = await pondFactory.createStandardPonds(
-								tokenAddress,
-								symbol,
-								minTossPrice,
-								maxTotalTossAmount,
-								pondPeriods,
-								{
-									gasLimit: GAS_LIMITS.CREATE_PONDS,
-								},
-							);
+			throw error;
+		}
+		// 5. Create standard ponds if enabled
+		if (createStandardPonds) {
+			console.log("\n5️⃣ Creating standard ponds...");
 
-							console.log(
-								`📤 Create token ponds transaction sent: ${tx4.hash}`,
-							);
-							await tx4.wait();
-							console.log(`✅ ${symbol} ponds created successfully`);
-						} catch (error) {
-							console.error(
-								`❌ Failed to create ponds for ${symbol}: ${error.message}`,
-							);
-							// Continue with other tokens
-						}
+			// Define pond periods to create (all standard periods)
+			const pondPeriods = [0, 1, 2, 3, 4]; // Five-min, Hourly, Daily, Weekly, Monthly
+
+			// Create native ETH ponds
+			console.log("🌊 Creating native ETH ponds...");
+
+			try {
+				// Create ponds with high gas limit
+				const tx2 = await pondFactory.createStandardPonds(
+					ethers.ZeroAddress, // Native ETH
+					"ETH",
+					minTossPrice,
+					maxTotalTossAmount,
+					pondPeriods,
+					{
+						gasLimit: GAS_LIMITS.CREATE_PONDS,
+					},
+				);
+
+				console.log(`📤 Create standard ponds transaction sent: ${tx2.hash}`);
+				await tx2.wait();
+				console.log("✅ ETH ponds created successfully");
+			} catch (error) {
+				console.error(`❌ Failed to create ETH ponds: ${error.message}`);
+				// Continue with other tokens even if ETH ponds fail
+			}
+
+			// Create ERC20 token ponds if any tokens are specified
+			const defaultTokensEnv = process.env[`${configPrefix}_DEFAULT_TOKENS`];
+			if (defaultTokensEnv) {
+				const defaultTokens = defaultTokensEnv.split(",");
+				console.log(
+					`🪙 Found ${defaultTokens.length} tokens to set up ponds for`,
+				);
+
+				for (const tokenAddress of defaultTokens) {
+					// Get token symbol (try with error handling)
+					let symbol = "TOKEN";
+					try {
+						const tokenContract = await ethers.getContractAt(
+							"IERC20Metadata",
+							tokenAddress,
+						);
+						symbol = await tokenContract.symbol();
+					} catch (error) {
+						console.warn(
+							`⚠️ Could not get symbol for token ${tokenAddress}, using default`,
+						);
+					}
+
+					console.log(`🪙 Creating ponds for ${symbol} (${tokenAddress})...`);
+
+					try {
+						// Register token with high gas limit
+						const tx3 = await pondFactory.addSupportedToken(
+							tokenAddress,
+							symbol,
+							{
+								gasLimit: GAS_LIMITS.GRANT_ROLE,
+							},
+						);
+
+						console.log(`📤 Register token transaction sent: ${tx3.hash}`);
+						await tx3.wait();
+
+						// Create token ponds with high gas limit
+						const tx4 = await pondFactory.createStandardPonds(
+							tokenAddress,
+							symbol,
+							minTossPrice,
+							maxTotalTossAmount,
+							pondPeriods,
+							{
+								gasLimit: GAS_LIMITS.CREATE_PONDS,
+							},
+						);
+
+						console.log(`📤 Create token ponds transaction sent: ${tx4.hash}`);
+						await tx4.wait();
+						console.log(`✅ ${symbol} ponds created successfully`);
+					} catch (error) {
+						console.error(
+							`❌ Failed to create ponds for ${symbol}: ${error.message}`,
+						);
+						// Continue with other tokens
 					}
 				}
 			}
-		} catch (factoryError) {
-			console.error(
-				`❌ PondFactory deployment failed: ${factoryError.message}`,
-			);
-			console.error(factoryError);
-
-			// Still save the partial deployment info
-			deploymentInfo.factoryError = {
-				message: factoryError.message,
-				stack: factoryError.stack,
-			};
 		}
+	} catch (factoryError) {
+		console.error(`❌ PondFactory deployment failed: ${factoryError.message}`);
+		console.error(factoryError);
 
-		// 6. Save deployment information
-		const deployDir = path.join(__dirname, "../deployments");
-		if (!fs.existsSync(deployDir)) {
-			fs.mkdirSync(deployDir, { recursive: true });
-		}
-
-		const timestamp = Math.floor(Date.now() / 1000);
-		const deploymentPath = path.join(
-			deployDir,
-			`${networkName}_${timestamp}.json`,
-		);
-
-		fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
-		console.log(`\n💾 Deployment information saved to: ${deploymentPath}`);
-
-		// Output important addresses
-		console.log("\n=== 🚀 DEPLOYMENT SUMMARY 🚀 ===");
-		console.log(`🌐 Network: ${networkName}`);
-		console.log(`💼 PondFeeDistributor: ${feeDistributorAddress}`);
-		console.log(`🌟 PondCore: ${pondCoreAddress}`);
-		if (deploymentInfo.pondFactory) {
-			console.log(`🏭 PondFactory: ${deploymentInfo.pondFactory}`);
-		} else {
-			console.log("🔴 PondFactory: DEPLOYMENT FAILED");
-		}
-		console.log("==========================");
-
-		// Update the .env file with the deployed contract addresses
-		console.log("\n📝 Update your .env file with these values:");
-		if (!existingDistributorAddress) {
-			console.log(
-				`${configPrefix}_DISTRIBUTOR_ADDRESS=${feeDistributorAddress}`,
-			);
-		}
-		if (!existingPondCoreAddress) {
-			console.log(`${configPrefix}_POND_CORE_ADDRESS=${pondCoreAddress}`);
-		}
-		if (deploymentInfo.pondFactory) {
-			console.log(
-				`${configPrefix}_POND_FACTORY_ADDRESS=${deploymentInfo.pondFactory}`,
-			);
-		}
-	} catch (error) {
-		console.error("\n❌ Error during deployment:");
-		console.error(error);
-
-		// Try to get more detailed error information
-		if (error.transaction) {
-			console.log("\n🔍 Transaction that caused the error:");
-			console.log(error.transaction);
-
-			try {
-				// Try to get transaction receipt for more details
-				const receipt = await ethers.provider.getTransactionReceipt(
-					error.transactionHash,
-				);
-				console.log("\n🧾 Transaction receipt:");
-				console.log(receipt);
-			} catch (receiptError) {
-				console.log(
-					"❌ Could not get transaction receipt:",
-					receiptError.message,
-				);
-			}
-		}
-
-		// Save partial deployment info
-		const deployDir = path.join(__dirname, "../deployments");
-		if (!fs.existsSync(deployDir)) {
-			fs.mkdirSync(deployDir, { recursive: true });
-		}
-
-		const timestamp = Math.floor(Date.now() / 1000);
-		const deploymentPath = path.join(
-			deployDir,
-			`${networkName}_${timestamp}_partial.json`,
-		);
-
-		deploymentInfo.error = {
-			message: error.message,
-			stack: error.stack,
+		// Still save the partial deployment info
+		deploymentInfo.factoryError = {
+			message: factoryError.message,
+			stack: factoryError.stack,
 		};
-
-		fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
-		console.log(
-			`\n💾 Partial deployment information saved to: ${deploymentPath}`,
-		);
-
-		throw error;
 	}
 }
 
