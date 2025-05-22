@@ -736,6 +736,40 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
+     * @dev Check if upkeep is needed for any pond
+     * @param performData Data passed to performUpkeep
+     * @return upkeepNeeded True if upkeep is needed, false otherwise
+     * @return performData Data to pass to performUpkeep
+     */
+    function checkUpkeep(bytes calldata) external view returns (bool upkeepNeeded, bytes memory performData) {
+        // Check all ponds to see if any need winner selection
+        for (uint i = 0; i < allPondTypes.length; i++) {
+            bytes32 pondType = allPondTypes[i];
+            Pond storage pond = ponds[pondType];
+            
+            uint256 effectiveTimelock = pond.period == PondPeriod.FIVE_MINUTES 
+                ? selectionTimelock / 3 
+                : selectionTimelock;
+                
+            // Check if pond ended and timelock passed
+            if (!pond.prizeDistributed && 
+                block.timestamp > pond.endTime + effectiveTimelock) {
+                return (true, abi.encode(pondType));
+            }
+        }
+        return (false, "");
+    }
+
+    /**
+     * @dev Perform upkeep to select a winner
+     * @param performData The data passed from checkUpkeep
+     */
+    function performUpkeep(bytes calldata performData) external {
+        bytes32 pondType = abi.decode(performData, (bytes32));
+        this.selectLuckyWinner(pondType);
+    }
+
+    /**
      * @dev Pause the contract
      */
     function pause() external onlyRole(ADMIN_ROLE) {
@@ -942,42 +976,42 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     function getStandardPondsForUI(address _tokenAddress) external view returns (PondDisplayInfo[] memory) {
-    PondDisplayInfo[] memory result = new PondDisplayInfo[](5); // 5 standard types: 5min, hourly, daily, weekly, monthly
-    
-    // For native token, use predefined IDs
-    if (_tokenAddress == address(0)) {
-        // Check if ponds exist and get names
-        result[0] = _getPondInfoIfExists(FIVE_MIN_POND_TYPE, "5-Min ETH Pond", PondPeriod.FIVE_MINUTES);
-        result[1] = _getPondInfoIfExists(HOURLY_POND_TYPE, "Hourly ETH Pond", PondPeriod.HOURLY);
-        result[2] = _getPondInfoIfExists(DAILY_POND_TYPE, "Daily ETH Pond", PondPeriod.DAILY);
-        result[3] = _getPondInfoIfExists(WEEKLY_POND_TYPE, "Weekly ETH Pond", PondPeriod.WEEKLY);
-        result[4] = _getPondInfoIfExists(MONTHLY_POND_TYPE, "Monthly ETH Pond", PondPeriod.MONTHLY);
-    } else {
-        // Generate types for ERC20 token
-        bytes32 fiveMinType = keccak256(abi.encodePacked("POND_5MIN", _tokenAddress));
-        bytes32 hourlyType = keccak256(abi.encodePacked("POND_HOURLY", _tokenAddress));
-        bytes32 dailyType = keccak256(abi.encodePacked("POND_DAILY", _tokenAddress));
-        bytes32 weeklyType = keccak256(abi.encodePacked("POND_WEEKLY", _tokenAddress));
-        bytes32 monthlyType = keccak256(abi.encodePacked("POND_MONTHLY", _tokenAddress));
+        PondDisplayInfo[] memory result = new PondDisplayInfo[](5); // 5 standard types: 5min, hourly, daily, weekly, monthly
         
-        // Get the token symbol if available (fallback to "Token" if not)
-        string memory symbol = "Token";
-        try IERC20Metadata(_tokenAddress).symbol() returns (string memory s) {
-            symbol = s;
-        } catch {
-            // If symbol() call fails, just use "Token"
+        // For native token, use predefined IDs
+        if (_tokenAddress == address(0)) {
+            // Check if ponds exist and get names
+            result[0] = _getPondInfoIfExists(FIVE_MIN_POND_TYPE, "5-Min Pond", PondPeriod.FIVE_MINUTES);
+            result[1] = _getPondInfoIfExists(HOURLY_POND_TYPE, "Hourly Pond", PondPeriod.HOURLY);
+            result[2] = _getPondInfoIfExists(DAILY_POND_TYPE, "Daily Pond", PondPeriod.DAILY);
+            result[3] = _getPondInfoIfExists(WEEKLY_POND_TYPE, "Weekly Pond", PondPeriod.WEEKLY);
+            result[4] = _getPondInfoIfExists(MONTHLY_POND_TYPE, "Monthly Pond", PondPeriod.MONTHLY);
+        } else {
+            // Generate types for ERC20 token
+            bytes32 fiveMinType = keccak256(abi.encodePacked("POND_5MIN", _tokenAddress));
+            bytes32 hourlyType = keccak256(abi.encodePacked("POND_HOURLY", _tokenAddress));
+            bytes32 dailyType = keccak256(abi.encodePacked("POND_DAILY", _tokenAddress));
+            bytes32 weeklyType = keccak256(abi.encodePacked("POND_WEEKLY", _tokenAddress));
+            bytes32 monthlyType = keccak256(abi.encodePacked("POND_MONTHLY", _tokenAddress));
+            
+            // Get the token symbol if available (fallback to "Token" if not)
+            string memory symbol = "Token";
+            try IERC20Metadata(_tokenAddress).symbol() returns (string memory s) {
+                symbol = s;
+            } catch {
+                // If symbol() call fails, just use "Token"
+            }
+            
+            // Check if ponds exist and get names
+            result[0] = _getPondInfoIfExists(fiveMinType, string(abi.encodePacked("5-Min ", symbol, " Pond")), PondPeriod.FIVE_MINUTES);
+            result[1] = _getPondInfoIfExists(hourlyType, string(abi.encodePacked("Hourly ", symbol, " Pond")), PondPeriod.HOURLY);
+            result[2] = _getPondInfoIfExists(dailyType, string(abi.encodePacked("Daily ", symbol, " Pond")), PondPeriod.DAILY);
+            result[3] = _getPondInfoIfExists(weeklyType, string(abi.encodePacked("Weekly ", symbol, " Pond")), PondPeriod.WEEKLY);
+            result[4] = _getPondInfoIfExists(monthlyType, string(abi.encodePacked("Monthly ", symbol, " Pond")), PondPeriod.MONTHLY);
         }
         
-        // Check if ponds exist and get names
-        result[0] = _getPondInfoIfExists(fiveMinType, string(abi.encodePacked("5-Min ", symbol, " Pond")), PondPeriod.FIVE_MINUTES);
-        result[1] = _getPondInfoIfExists(hourlyType, string(abi.encodePacked("Hourly ", symbol, " Pond")), PondPeriod.HOURLY);
-        result[2] = _getPondInfoIfExists(dailyType, string(abi.encodePacked("Daily ", symbol, " Pond")), PondPeriod.DAILY);
-        result[3] = _getPondInfoIfExists(weeklyType, string(abi.encodePacked("Weekly ", symbol, " Pond")), PondPeriod.WEEKLY);
-        result[4] = _getPondInfoIfExists(monthlyType, string(abi.encodePacked("Monthly ", symbol, " Pond")), PondPeriod.MONTHLY);
+        return result;
     }
-    
-    return result;
-}
 
     /**
     * @dev Helper function to get pond info if it exists
@@ -999,7 +1033,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Allow the contract to receive native currency
-     */
+    * @dev Allow the contract to receive native currency
+    */
     receive() external payable {}
 }

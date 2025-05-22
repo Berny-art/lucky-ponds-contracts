@@ -101,8 +101,8 @@ async function main() {
 	// Define gas limits for complex contracts (customize as needed)
 	const GAS_LIMITS = {
 		FEE_DISTRIBUTOR: 10000000,
-		POND_CORE: 10000000,
-		POND_FACTORY: 10000000,
+		POND_CORE: 15000000,
+		POND_FACTORY: 15000000,
 		GRANT_ROLE: 10000000,
 		CREATE_PONDS: 20000000,
 	};

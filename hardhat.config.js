@@ -3,6 +3,7 @@ require("dotenv").config();
 
 require("./tasks/query-ponds");
 require("./tasks/simulate-tosses");
+require("./tasks/emergency-refund");
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
