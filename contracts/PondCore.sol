@@ -143,6 +143,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     event CoinTossed(
         bytes32 indexed pondType,
         address indexed participant, 
+        address indexed tokenAddress,
         uint256 amount,
         uint256 timestamp, 
         uint256 totalPondTosses, 
@@ -160,25 +161,26 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     event LuckyWinnerSelected(
         bytes32 indexed pondType, 
         address indexed winner, 
+        address indexed tokenAddress,  
         uint256 prize, 
         address selector
     );
     
     event ConfigChanged(
-        string configType,         // Type of config change
-        bytes32 indexed pondType,  // Zero bytes for global settings
-        uint256 oldValue,          // Old numeric value or 0 for address changes
-        uint256 newValue,          // New numeric value or 0 for address changes
-        address oldAddress,        // Old address or zero address for numeric changes
-        address newAddress         // New address or zero address for numeric changes
+        string configType,
+        bytes32 indexed pondType,
+        uint256 oldValue,
+        uint256 newValue,
+        address oldAddress,
+        address newAddress
     );
     
     event EmergencyAction(
-        string actionType,             // "withdraw", "tokenWithdraw", "pondReset"
-        address indexed recipient,     // Recipient of funds or zero address for resets
-        address indexed token,         // Token address or zero address for ETH/resets
-        uint256 amount,                // Amount withdrawn or 0 for resets
-        bytes32 indexed pondType       // Pond type for resets or zero bytes for withdrawals
+        string actionType,
+        address indexed recipient,
+        address indexed token,
+        uint256 amount,
+        bytes32 indexed pondType
     );
 
     /**
@@ -334,6 +336,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         emit CoinTossed(
             _pondType,
             msg.sender,
+            pond.tokenAddress,  // Include token address
             tossAmount,
             block.timestamp,
             pond.totalTosses,
@@ -431,7 +434,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         _distributePrize(_pondType, winner, prize, fee);
 
         // Emit event
-        emit LuckyWinnerSelected(_pondType, winner, prize, msg.sender);
+        emit LuckyWinnerSelected(_pondType, winner, pond.tokenAddress, prize, msg.sender);
 
         // Reset the pond
         _resetPond(_pondType);

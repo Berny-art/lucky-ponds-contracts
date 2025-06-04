@@ -23,10 +23,8 @@ async function main() {
 	// Load configuration based on network
 	const hyperFrogsV2Address =
 		process.env[`${configPrefix}_HYPERFROGS_V2_ADDRESS`];
-	const unmigratedClaimAddress =
-		process.env[`${configPrefix}_UNMIGRATED_CLAIM_ADDRESS`];
-	const existingDistributorAddress =
-		process.env[`${configPrefix}_DISTRIBUTOR_ADDRESS`];
+	const feeAddress =
+		process.env[`${configPrefix}_FEE_ADDRESS`];
 	const existingPondCoreAddress =
 		process.env[`${configPrefix}_POND_CORE_ADDRESS`];
 	const createStandardPonds =
@@ -61,12 +59,12 @@ async function main() {
 	// Validate key configuration
 	if (!hyperFrogsV2Address)
 		throw new Error(`❌ Missing ${configPrefix}_HYPERFROGS_V2_ADDRESS`);
-	if (!unmigratedClaimAddress)
-		throw new Error(`❌ Missing ${configPrefix}_UNMIGRATED_CLAIM_ADDRESS`);
+	if (!feeAddress)
+		throw new Error(`❌ Missing ${configPrefix}_FEE_ADDRESS`);
 
 	console.log("📋 Configuration loaded:");
 	console.log(`- 🐸 HyperFrogs V2: ${hyperFrogsV2Address}`);
-	console.log(`- 🏦 Unmigrated Claim Address: ${unmigratedClaimAddress}`);
+	console.log(`- 💼 Fee Address: ${feeAddress}`);
 	console.log(`- 💰 Min Toss Price: ${ethers.formatEther(minTossPrice)} ETH`);
 	console.log(
 		`- 💸 Max Total Toss Amount: ${ethers.formatEther(maxTotalTossAmount)} ETH`,
@@ -77,12 +75,6 @@ async function main() {
 	console.log(
 		`- 🌊 Create Standard Ponds: ${createStandardPonds ? "✅ Yes" : "❌ No"}`,
 	);
-
-	if (existingDistributorAddress) {
-		console.log(
-			`- 💼 Using existing Distributor: ${existingDistributorAddress}`,
-		);
-	}
 
 	if (existingPondCoreAddress) {
 		console.log(`- 🌟 Using existing PondCore: ${existingPondCoreAddress}`);
@@ -100,7 +92,6 @@ async function main() {
 
 	// Define gas limits for complex contracts (customize as needed)
 	const GAS_LIMITS = {
-		FEE_DISTRIBUTOR: 10000000,
 		POND_CORE: 15000000,
 		POND_FACTORY: 15000000,
 		GRANT_ROLE: 10000000,
@@ -118,82 +109,10 @@ async function main() {
 		deployer: deployer.address,
 		timestamp: new Date().toISOString(),
 		hyperFrogsV2: hyperFrogsV2Address,
-		unmigratedClaimAddress: unmigratedClaimAddress,
+		feeAddress: feeAddress,
 	};
 
 	try {
-		// Determine fee distributor address - use existing or deploy new
-		let feeDistributorAddress;
-
-		if (
-			existingDistributorAddress &&
-			ethers.isAddress(existingDistributorAddress)
-		) {
-			console.log("\n🔄 Using existing PondFeeDistributor from .env file");
-			feeDistributorAddress = existingDistributorAddress;
-			deploymentInfo.pondFeeDistributor = feeDistributorAddress;
-			console.log(`📍 PondFeeDistributor address: ${feeDistributorAddress}`);
-
-			// Verify the contract exists
-			try {
-				const code = await ethers.provider.getCode(feeDistributorAddress);
-				if (code === "0x") {
-					console.warn(
-						`⚠️ WARNING: No contract code found at the provided distributor address: ${feeDistributorAddress}`,
-					);
-					console.warn(
-						"Will continue anyway, but this might cause issues later.",
-					);
-				} else {
-					console.log("✅ Contract verified at address");
-				}
-			} catch (error) {
-				console.warn(
-					`⚠️ WARNING: Error checking contract code at distributor address: ${error.message}`,
-				);
-			}
-		} else {
-			// 1. Deploy PondFeeDistributor first
-			console.log("\n1️⃣ Deploying PondFeeDistributor...");
-
-			const gasReserve = ethers.parseEther("0.01"); // Reserve 0.01 ETH for gas
-			const initialClaimPeriod = 7 * 24 * 60 * 60; // 7 days in seconds
-
-			// Log contract parameters for debugging
-			console.log("📝 PondFeeDistributor constructor parameters:");
-			console.log(`- 🐸 NFT Contract: ${hyperFrogsV2Address}`);
-			console.log(`- 🏦 Project Wallet: ${unmigratedClaimAddress}`);
-			console.log(`- ⛽ Gas Reserve: ${ethers.formatEther(gasReserve)} ETH`);
-			console.log(`- 🔢 Min NFTs Required: ${minFrogsRequired}`);
-			console.log(`- ⏱️ Initial Claim Period: ${initialClaimPeriod} seconds`);
-
-			const PondFeeDistributor =
-				await ethers.getContractFactory("PondFeeDistributor");
-
-			// Deploy with high gas limit
-			const feeDistributor = await PondFeeDistributor.deploy(
-				hyperFrogsV2Address,
-				unmigratedClaimAddress,
-				gasReserve,
-				minFrogsRequired,
-				initialClaimPeriod,
-				{ gasLimit: GAS_LIMITS.FEE_DISTRIBUTOR },
-			);
-
-			console.log(
-				`📤 PondFeeDistributor deployment transaction sent: ${
-					feeDistributor.deploymentTransaction().hash
-				}`,
-			);
-			await feeDistributor.waitForDeployment();
-			feeDistributorAddress = await feeDistributor.getAddress();
-
-			console.log(
-				`🎉 PondFeeDistributor deployed to: ${feeDistributorAddress}`,
-			);
-			deploymentInfo.pondFeeDistributor = feeDistributorAddress;
-		}
-
 		// Determine PondCore address - use existing or deploy new
 		let pondCoreAddress;
 
@@ -229,13 +148,13 @@ async function main() {
 			try {
 				const actualFeeAddress = await pondCore.feeAddress();
 				if (
-					actualFeeAddress.toLowerCase() !== feeDistributorAddress.toLowerCase()
+					actualFeeAddress.toLowerCase() !== feeAddress.toLowerCase()
 				) {
 					console.warn(
-						`⚠️ WARNING: PondCore fee address (${actualFeeAddress}) does not match provided distributor address (${feeDistributorAddress})`,
+						`⚠️ WARNING: PondCore fee address (${actualFeeAddress}) does not match provided fee address (${feeAddress})`,
 					);
 				} else {
-					console.log("✅ PondCore fee address matches distributor address");
+					console.log("✅ PondCore fee address matches provided fee address");
 				}
 			} catch (error) {
 				console.warn(
@@ -243,10 +162,10 @@ async function main() {
 				);
 			}
 		} else {
-			// 2. Deploy PondCore using PondFeeDistributor as fee address
-			console.log("\n2️⃣ Deploying PondCore...");
+			// 1. Deploy PondCore
+			console.log("\n1️⃣ Deploying PondCore...");
 			console.log("📝 PondCore constructor parameters:");
-			console.log(`- 💼 Fee Address: ${feeDistributorAddress}`);
+			console.log(`- 💼 Fee Address: ${feeAddress}`);
 			console.log(`- 💹 Fee Percentage: ${feePercentage}`);
 			console.log(`- ⏱️ Selection Timelock: ${selectionTimelock} seconds`);
 
@@ -254,7 +173,7 @@ async function main() {
 
 			// Deploy with high gas limit for complex contract
 			const pondCore = await PondCore.deploy(
-				feeDistributorAddress,
+				feeAddress,
 				feePercentage,
 				selectionTimelock,
 				{ gasLimit: GAS_LIMITS.POND_CORE },
@@ -272,8 +191,8 @@ async function main() {
 			deploymentInfo.pondCore = pondCoreAddress;
 		}
 
-		// 3. Deploy PondFactory
-		console.log("\n3️⃣ Deploying PondFactory...");
+		// 2. Deploy PondFactory
+		console.log("\n2️⃣ Deploying PondFactory...");
 		console.log("📝 PondFactory constructor parameters:");
 		console.log(`- 🌟 PondCore Address: ${pondCoreAddress}`);
 
@@ -298,8 +217,8 @@ async function main() {
 			// Get the PondCore contract instance
 			const pondCore = await ethers.getContractAt("PondCore", pondCoreAddress);
 
-			// 4. Grant FACTORY_ROLE to PondFactory
-			console.log("\n4️⃣ Setting up roles...");
+			// 3. Grant FACTORY_ROLE to PondFactory
+			console.log("\n3️⃣ Setting up roles...");
 
 			const factoryRole = await pondCore.FACTORY_ROLE();
 			console.log(`🔑 Factory role hash: ${factoryRole}`);
@@ -316,7 +235,7 @@ async function main() {
 				`✅ Granted FACTORY_ROLE to PondFactory: ${pondFactoryAddress}`,
 			);
 
-			// 5. Save deployment information
+			// 4. Save deployment information
 			const deployDir = path.join(__dirname, "../deployments");
 			if (!fs.existsSync(deployDir)) {
 				fs.mkdirSync(deployDir, { recursive: true });
@@ -334,7 +253,7 @@ async function main() {
 			// Output important addresses
 			console.log("\n=== 🚀 DEPLOYMENT SUMMARY 🚀 ===");
 			console.log(`🌐 Network: ${networkName}`);
-			console.log(`💼 PondFeeDistributor: ${feeDistributorAddress}`);
+			console.log(`💼 Fee Address: ${feeAddress}`);
 			console.log(`🌟 PondCore: ${pondCoreAddress}`);
 			if (deploymentInfo.pondFactory) {
 				console.log(`🏭 PondFactory: ${deploymentInfo.pondFactory}`);
@@ -345,11 +264,6 @@ async function main() {
 
 			// Update the .env file with the deployed contract addresses
 			console.log("\n📝 Update your .env file with these values:");
-			if (!existingDistributorAddress) {
-				console.log(
-					`${configPrefix}_DISTRIBUTOR_ADDRESS=${feeDistributorAddress}`,
-				);
-			}
 			if (!existingPondCoreAddress) {
 				console.log(`${configPrefix}_POND_CORE_ADDRESS=${pondCoreAddress}`);
 			}
