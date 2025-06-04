@@ -10,13 +10,13 @@ task(
 	.addParam(
 		"minpond",
 		"Minimum number of ponds to use per account (1-5)",
-		1,
+		2,
 		types.int,
 	)
 	.addParam(
 		"maxpond",
 		"Maximum number of ponds to use per account (1-5)",
-		3,
+		5,
 		types.int,
 	)
 	.addParam(
@@ -28,7 +28,7 @@ task(
 	.addParam(
 		"maxtoss",
 		"Maximum number of tosses per account per pond",
-		5,
+		1,
 		types.int,
 	)
 	.addParam(

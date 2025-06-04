@@ -104,8 +104,10 @@ async function main() {
 	console.log(`💎 Balance: ${ethers.formatEther(deployerBalance)} ETH`);
 
 	// Define the pond types we'll create for each token
-	const periodNames = ["Five-Min", "Hourly", "Daily", "Weekly", "Monthly"];
-	const pondPeriods = [0, 1, 2, 3, 4]; // Five-min, Hourly, Daily, Weekly, Monthly
+	// const periodNames = ["Five-Min", "Hourly", "Daily", "Weekly", "Monthly"];
+	// const pondPeriods = [0, 1, 2, 3, 4]; // Five-min, Hourly, Daily, Weekly, Monthly
+	const periodNames = ["Daily", "Weekly", "Monthly"];
+	const pondPeriods = [2, 3, 4]; // Five-min, Hourly, Daily, Weekly, Monthly
 
 	// Gas settings - can be adjusted if needed
 	const GAS_LIMIT = 15000000; // 15 million gas
