@@ -28,21 +28,21 @@ module.exports = {
 			accounts: [process.env.PRIVATE_KEY],
 			chainId: 999,
 		},
-		"hyperliquid-evm": {
-			url: "https://rpc.hyperliquid.xyz/evm",
-		},
+		'hyperevm-mainnet': {
+      url: 'https://rpc.hyperliquid.xyz/evm'
+    },
 	},
 	etherscan: {
 		apiKey: {
-			"hyperliquid-evm": "empty",
-		},
+      'hyperevm-mainnet': 'empty'
+    },
 		customChains: [
 			{
-				network: "hyperliquid-evm",
+				network: "hyperevm-mainnet",
 				chainId: 999,
 				urls: {
-					apiURL: "https://hyperliquid.cloud.blockscout.com/api",
-					browserURL: "https://hyperliquid.cloud.blockscout.com",
+					apiURL: "https://www.hyperscan.com/api",
+          browserURL: "https://www.hyperscan.com"
 				},
 			},
 		],

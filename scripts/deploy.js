@@ -20,9 +20,6 @@ async function main() {
 	);
 	console.log(`⛓️ Chain ID: ${network.chainId}`);
 
-	// Load configuration based on network
-	const hyperFrogsV2Address =
-		process.env[`${configPrefix}_HYPERFROGS_V2_ADDRESS`];
 	const feeAddress =
 		process.env[`${configPrefix}_FEE_ADDRESS`];
 	const existingPondCoreAddress =
@@ -42,34 +39,25 @@ async function main() {
 		);
 	} catch (error) {
 		console.error("⚠️ Error parsing ETH amounts, using defaults");
-		minTossPrice = ethers.parseEther("0.0001");
+		minTossPrice = ethers.parseEther("0.1");
 		maxTotalTossAmount = ethers.parseEther("10");
 	}
-
-	const minFrogsRequired = Number.parseInt(
-		process.env[`${configPrefix}_MIN_FROGS_REQUIRED`] || "5",
-	);
 	const selectionTimelock = Number.parseInt(
-		process.env[`${configPrefix}_SELECTION_TIMELOCK`] || "60",
+		process.env[`${configPrefix}_SELECTION_TIMELOCK`] || "30",
 	);
 	const feePercentage = Number.parseInt(
 		process.env[`${configPrefix}_FEE_PERCENTAGE`] || "7",
 	);
 
-	// Validate key configuration
-	if (!hyperFrogsV2Address)
-		throw new Error(`❌ Missing ${configPrefix}_HYPERFROGS_V2_ADDRESS`);
 	if (!feeAddress)
 		throw new Error(`❌ Missing ${configPrefix}_FEE_ADDRESS`);
 
 	console.log("📋 Configuration loaded:");
-	console.log(`- 🐸 HyperFrogs V2: ${hyperFrogsV2Address}`);
 	console.log(`- 💼 Fee Address: ${feeAddress}`);
 	console.log(`- 💰 Min Toss Price: ${ethers.formatEther(minTossPrice)} ETH`);
 	console.log(
 		`- 💸 Max Total Toss Amount: ${ethers.formatEther(maxTotalTossAmount)} ETH`,
 	);
-	console.log(`- 🔢 Min Frogs Required: ${minFrogsRequired}`);
 	console.log(`- ⏱️ Selection Timelock: ${selectionTimelock} seconds`);
 	console.log(`- 💹 Fee Percentage: ${feePercentage}%`);
 	console.log(
@@ -108,7 +96,6 @@ async function main() {
 		chainId: Number(network.chainId),
 		deployer: deployer.address,
 		timestamp: new Date().toISOString(),
-		hyperFrogsV2: hyperFrogsV2Address,
 		feeAddress: feeAddress,
 	};
 

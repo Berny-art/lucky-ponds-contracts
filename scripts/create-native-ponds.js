@@ -22,18 +22,11 @@ async function main() {
 	console.log(`⛓️ Chain ID: ${network.chainId}`);
 
 	// Load contract addresses from environment
-	const distributorAddress = process.env[`${configPrefix}_DISTRIBUTOR_ADDRESS`];
 	const pondCoreAddress = process.env[`${configPrefix}_POND_CORE_ADDRESS`];
 	const pondFactoryAddress =
 		process.env[`${configPrefix}_POND_FACTORY_ADDRESS`];
 
 	// Validate addresses
-	if (!distributorAddress || !ethers.isAddress(distributorAddress)) {
-		throw new Error(
-			`❌ Missing or invalid ${configPrefix}_DISTRIBUTOR_ADDRESS`,
-		);
-	}
-
 	if (!pondCoreAddress || !ethers.isAddress(pondCoreAddress)) {
 		throw new Error(`❌ Missing or invalid ${configPrefix}_POND_CORE_ADDRESS`);
 	}
@@ -45,7 +38,6 @@ async function main() {
 	}
 
 	console.log("📋 Contract Addresses:");
-	console.log(`- 💼 Distributor: ${distributorAddress}`);
 	console.log(`- 🌟 PondCore: ${pondCoreAddress}`);
 	console.log(`- 🏭 PondFactory: ${pondFactoryAddress}`);
 
