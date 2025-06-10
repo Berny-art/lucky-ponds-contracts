@@ -26,9 +26,9 @@ async function main() {
     console.log(`📋 PondCore Address: ${pondCoreAddress}`);
 
     // Configuration - UPDATE THESE VALUES
-    const TOKEN_ADDRESS = "0xC003D79B8a489703b1753711E3ae9fFDFC8d1a82"; // Your ERC20 token
-    const NEW_MIN_TOSS = ethers.parseEther("5.0");
-    const NEW_MAX_TOTAL = ethers.parseEther("50.0");
+    const TOKEN_ADDRESS = "0x47bb061C0204Af921F43DC73C7D7768d2672DdEE"; // Replace with your ERC20 token address
+    const NEW_MIN_TOSS = ethers.parseEther("100.0"); // Replace with your desired minimum toss amount
+    const NEW_MAX_TOTAL = ethers.parseEther("10000.0"); // Replace with your desired maximum total amount
 
     console.log("\n🎯 Update Configuration:");
     console.log(`- Token Address: ${TOKEN_ADDRESS}`);

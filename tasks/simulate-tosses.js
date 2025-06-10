@@ -338,3 +338,5 @@ task(
 	});
 
 module.exports = {};
+
+// TESTNET npx hardhat simulate-tosses --network hyperliquid_testnet

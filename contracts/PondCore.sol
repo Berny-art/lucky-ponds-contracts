@@ -11,13 +11,12 @@ import "./PondUtils.sol";
 
 /**
  * @title PondCore
- * @dev Core contract for the LuckyPonds system
- * @author Berny Art (HyperFrogs), Modular Version
+ * @dev Core contract for the Lucky Ponds Lottery.
+ * @author Hyper Frogs (Berny Art)
  */
 contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // Custom errors for gas efficiency
     error ZeroAddress();
     error InvalidPondType();
     error PondNotOpen();
@@ -34,6 +33,9 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     error CannotRemovePondWithActivity();
     error FeeToHigh();
     error InvalidParameters();
+    error WeightedSelectionFailed();
+    error ParticipantLimitExceeded();
+    error InvalidBatchSize();
 
     // Roles
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -56,52 +58,50 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     bytes32 public immutable MONTHLY_POND_TYPE;
 
     /**
-     * @dev Pond struct containing all the data for a specific pond
+     * @dev Optimized Pond struct with packed storage
      */
     struct Pond {
-        // Slot 1 (256 bits total)
+        // Slot 1 (256 bits total) - Time and counters
         uint64 startTime;              // Timestamp when pond opens
-        uint64 endTime;                // Timestamp when pond closes
+        uint64 endTime;                // Timestamp when pond closes  
         uint64 totalTosses;            // Count of tosses in the pond
-        uint64 paddingA;               // Reserved for future use
+        uint32 totalParticipants;      // Count of unique participants
+        uint32 reserved;               // Reserved for future use
         
-        // Slot 2 (256 bits total)
+        // Slot 2 (256 bits total) - Values
         uint128 totalValue;            // Total value of all tosses
         uint128 totalFrogValue;        // For weighted selection
         
-        // Slot 3 (256 bits total)
-        uint64 minTossPrice;           // Minimum toss amount
-        uint64 paddingB;               // Reserved for future use
+        // Slot 3 (256 bits total) - Limits
+        uint128 minTossPrice;          // Minimum toss amount
         uint128 maxTotalTossAmount;    // Maximum total amount per user
         
-        // Slot 4 (160 bits + enum + enum + bool)
-        address tokenAddress;          // Zero address for native token
-        TokenType tokenType;           // Type of token (native or ERC20)
-        PondPeriod period;             // Period type (daily, weekly, etc.)
-        bool prizeDistributed;         // Whether prize has been distributed
+        // Slot 4 (256 bits total) - Address and flags
+        address tokenAddress;          // Zero address for native token (160 bits)
+        TokenType tokenType;           // Type of token (8 bits)
+        PondPeriod period;             // Period type (8 bits)  
+        bool prizeDistributed;         // Whether prize has been distributed (8 bits)
+        // 72 bits remaining for future use
         
-        // Slot 5+ (variable size)
+        // Variable slots
         bytes32 pondType;              // Unique identifier
         string pondName;               // Human-readable name
     }
+
     /**
-    * @dev Get standard pond info for UI display
-    * @param _tokenAddress The token address (address(0) for native ETH)
-    * @return An array of pond information with types, names, and periods
-    */
-    struct PondDisplayInfo {
-        bytes32 pondType;
-        string pondName;
-        PondPeriod period;
-        bool exists;
+     * @dev Packed participant data for gas optimization
+     */
+    struct PackedParticipant {
+        uint128 amount;               // Total amount tossed
+        uint128 lastTossIndex;        // Index of their last toss (for faster lookups)
     }
 
     /**
-     * @dev Participant information
+     * @dev Compressed toss data - packs participant index and value
      */
-    struct Participant {
-        uint256 amount;               // Total amount tossed
-        bool exists;                  // Whether user has participated
+    struct CompressedToss {
+        uint32 participantIndex;      // Index in participantsList
+        uint224 value;                // Toss value (supports up to ~2^224 wei)
     }
 
     /**
@@ -112,21 +112,35 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         uint256 tossAmount;
     }
 
-    // Config values
-    uint256 public defaultMinTossPrice;
-    uint256 public defaultMaxTotalTossAmount;
-    uint256 public feePercent;
-    uint256 public selectionTimelock;
-    address public feeAddress;
+    /**
+    * @dev Get standard pond info for UI display
+    */
+    struct PondDisplayInfo {
+        bytes32 pondType;
+        string pondName;
+        PondPeriod period;
+        bool exists;
+    }
 
-    // Mappings
+    // Config values with gas-optimized packing
+    struct Config {
+        uint128 defaultMinTossPrice;
+        uint128 defaultMaxTotalTossAmount;
+        uint32 maxParticipantsPerPond;    // NEW: Configurable participant limit
+        uint32 emergencyBatchSize;        // NEW: Configurable batch size for emergency operations
+        uint32 feePercent;                // Reduced from uint256 to uint32
+        uint32 selectionTimelock;         // Reduced from uint256 to uint32
+        address feeAddress;
+    }
+    
+    Config public config;
+
+    // Optimized mappings - using packed structs
     mapping(bytes32 => Pond) public ponds;
-    mapping(bytes32 => mapping(uint256 => address)) public pondParticipants;
-    mapping(bytes32 => mapping(uint256 => uint256)) public pondValues;
-    mapping(bytes32 => mapping(address => Participant)) public participants;
-    mapping(bytes32 => address[]) private participantsList;
-    mapping(bytes32 => address) public lastWinner;
-    mapping(bytes32 => uint256) public lastPrize;
+    mapping(bytes32 => CompressedToss[]) public pondTosses;        // NEW: Array of compressed tosses
+    mapping(bytes32 => address[]) public pondParticipants;        // Participants by index
+    mapping(bytes32 => mapping(address => PackedParticipant)) public participants;
+    mapping(bytes32 => mapping(address => uint32)) public participantIndex; // Address to index mapping
     
     // All pond types for iteration
     bytes32[] public allPondTypes;
@@ -137,7 +151,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         string name, 
         uint256 startTime, 
         uint256 endTime, 
-        string actionType  // "created", "reset", "removed"
+        string actionType
     );
     
     event CoinTossed(
@@ -165,6 +179,17 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         uint256 prize, 
         address selector
     );
+
+    event WinnerSelectionDetails(
+        bytes32 indexed pondType,
+        address indexed winner,
+        bytes32 entropySource,
+        uint256 randomValue,
+        uint256 totalFrogValue,
+        uint256 winningThreshold,
+        uint256 blockNumber,
+        bytes32 blockHash
+    );
     
     event ConfigChanged(
         string configType,
@@ -173,6 +198,12 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         uint256 newValue,
         address oldAddress,
         address newAddress
+    );
+
+    event ParticipantLimitWarning(
+        bytes32 indexed pondType, 
+        uint256 participantCount, 
+        uint256 warningThreshold
     );
     
     event EmergencyAction(
@@ -183,26 +214,34 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         bytes32 indexed pondType
     );
 
+    event GasUsageReport(
+        string operation,
+        uint256 participantCount,
+        uint256 gasUsed
+    );
+
     /**
-     * @dev Constructor initializes the contract with fee address and settings
-     * @param _feeAddress Address where fees will be sent
-     * @param _feePercent Fee percentage (out of 100)
-     * @param _selectionTimelock Time to wait after pond ends before selecting winner (in seconds)
+     * @dev Constructor with gas-optimized initialization
      */
     constructor(
         address _feeAddress,
-        uint256 _feePercent,
-        uint256 _selectionTimelock
+        uint32 _feePercent,
+        uint32 _selectionTimelock,
+        uint32 _maxParticipantsPerPond
     ) {
         if(_feeAddress == address(0)) revert ZeroAddress();
+        if(_feePercent > 10) revert FeeToHigh(); // Max 10%
         
-        feeAddress = _feeAddress;
-        feePercent = _feePercent;
-        selectionTimelock = _selectionTimelock;
-        
-        // Set default values
-        defaultMinTossPrice = 0.0001 ether;
-        defaultMaxTotalTossAmount = 10 ether;
+        // Initialize config struct in single SSTORE
+        config = Config({
+            defaultMinTossPrice: 0.0001 ether,
+            defaultMaxTotalTossAmount: 10 ether,
+            maxParticipantsPerPond: _maxParticipantsPerPond,
+            emergencyBatchSize: 100, // Default batch size
+            feePercent: _feePercent,
+            selectionTimelock: _selectionTimelock,
+            feeAddress: _feeAddress
+        });
         
         // Initialize standard pond IDs
         FIVE_MIN_POND_TYPE = keccak256(abi.encodePacked("POND_5MIN"));
@@ -218,16 +257,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Create a new pond
-     * @param _pondType Unique identifier for the pond
-     * @param _name Human-readable name for the pond
-     * @param _startTime Start time for the pond
-     * @param _endTime End time for the pond
-     * @param _minTossPrice Minimum price per toss
-     * @param _maxTotalTossAmount Maximum total amount allowed per user
-     * @param _tokenType Type of token accepted (native or ERC20)
-     * @param _tokenAddress Address of ERC20 token (zero address for native)
-     * @param _period Period type (hourly, daily, weekly, monthly, custom)
+     * @dev Create a new pond (unchanged from original)
      */
     function createPond(
         bytes32 _pondType,
@@ -246,16 +276,20 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         // Validate token settings
         if (_tokenType == TokenType.ERC20 && _tokenAddress == address(0)) revert ZeroAddress();
         
+        // Validate safe casting
+        if (_startTime > type(uint64).max || _endTime > type(uint64).max) revert InvalidParameters();
+        if (_minTossPrice > type(uint128).max || _maxTotalTossAmount > type(uint128).max) revert InvalidParameters();
+        
         // Create the pond with optimized storage
         Pond memory newPond = Pond({
             startTime: uint64(_startTime),
             endTime: uint64(_endTime),
             totalTosses: 0,
-            paddingA: 0,
+            totalParticipants: 0,
+            reserved: 0,
             totalValue: 0,
             totalFrogValue: 0,
-            minTossPrice: uint64(_minTossPrice),
-            paddingB: 0,
+            minTossPrice: uint128(_minTossPrice),
             maxTotalTossAmount: uint128(_maxTotalTossAmount),
             tokenType: _tokenType,
             tokenAddress: _tokenAddress,
@@ -266,40 +300,36 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         });
         
         ponds[_pondType] = newPond;
-        
-        // Add to the list of all ponds
         allPondTypes.push(_pondType);
         
-        // Emit event
         emit PondAction(_pondType, _name, _startTime, _endTime, "created");
     }
 
     /**
-     * @dev Unified function to toss coins/tokens into a pond
-     * @param _pondType The type of pond to toss into
-     * @param _amount Amount of tokens to toss (ignored for native currency)
+     * @dev Gas-optimized toss function
      */
     function toss(bytes32 _pondType, uint256 _amount) external payable whenNotPaused nonReentrant {
+        uint256 gasStart = gasleft();
+        
         Pond storage pond = ponds[_pondType];
         
-        // Check if pond exists
+        // Check if pond exists and is open
         if (pond.endTime == 0) revert InvalidPondType();
-        
-        // Check if pond is open
         if (block.timestamp < pond.startTime || block.timestamp > pond.endTime) revert PondNotOpen();
+        
+        // Check participant limit
+        if (pond.totalParticipants >= config.maxParticipantsPerPond) {
+            revert ParticipantLimitExceeded();
+        }
         
         uint256 tossAmount;
         
         // Handle different token types
         if (pond.tokenType == TokenType.NATIVE) {
-            // Check amount meets minimum
             if (msg.value < pond.minTossPrice) revert AmountTooLow();
             tossAmount = msg.value;
         } else if (pond.tokenType == TokenType.ERC20) {
-            // Check amount meets minimum
             if (_amount < pond.minTossPrice) revert AmountTooLow();
-            
-            // Transfer tokens from user to contract
             IERC20 token = IERC20(pond.tokenAddress);
             token.safeTransferFrom(msg.sender, address(this), _amount);
             tossAmount = _amount;
@@ -308,68 +338,84 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         }
         
         // Check max toss amount
-        uint256 currentAmount = participants[_pondType][msg.sender].amount;
-        uint256 newTotalAmount = currentAmount + tossAmount;
+        PackedParticipant storage participant = participants[_pondType][msg.sender];
+        uint256 newTotalAmount = participant.amount + tossAmount;
         if (newTotalAmount > pond.maxTotalTossAmount) revert MaxTossAmountExceeded();
         
-        // Store participant and value for selection
-        uint64 currentToss = pond.totalTosses;
-        pondParticipants[_pondType][currentToss] = msg.sender;
-        pondValues[_pondType][currentToss] = tossAmount;
+        // Get or assign participant index - simplified approach
+        address[] storage participantsList = pondParticipants[_pondType];
+        uint32 participantIdx;
+        bool isNewParticipant = false;
+        
+        // Check if participant already exists
+        if (participants[_pondType][msg.sender].amount == 0) {
+            // New participant
+            participantsList.push(msg.sender);
+            participantIdx = uint32(participantsList.length - 1);
+            participantIndex[_pondType][msg.sender] = participantIdx;
+            pond.totalParticipants++;
+            isNewParticipant = true;
+            
+            // Check for warning threshold (80% of max)
+            if (pond.totalParticipants > (config.maxParticipantsPerPond * 80) / 100) {
+                emit ParticipantLimitWarning(_pondType, pond.totalParticipants, (config.maxParticipantsPerPond * 80) / 100);
+            }
+        } else {
+            // Existing participant
+            participantIdx = participantIndex[_pondType][msg.sender];
+        }
+        
+        // Store compressed toss data with safe casting
+        if (tossAmount > type(uint224).max) {
+            revert AmountTooLow(); // Reuse existing error for amount validation
+        }
+        
+        pondTosses[_pondType].push(CompressedToss({
+            participantIndex: participantIdx,
+            value: uint224(tossAmount)
+        }));
         
         // Update pond totals
-        pond.totalTosses = currentToss + 1;
+        pond.totalTosses++;
         pond.totalValue += uint128(tossAmount);
         pond.totalFrogValue += uint128(tossAmount);
         
-        // Track user participation
-        Participant storage participant = participants[_pondType][msg.sender];
-        participant.amount += tossAmount;
-        
-        // Add to unique participants list if first time
-        if (!participant.exists) {
-            participantsList[_pondType].push(msg.sender);
-            participant.exists = true;
-        }
+        // Update participant data
+        participant.amount += uint128(tossAmount);
+        participant.lastTossIndex = uint128(pond.totalTosses - 1);
 
         // Emit event
         emit CoinTossed(
             _pondType,
             msg.sender,
-            pond.tokenAddress,  // Include token address
+            pond.tokenAddress,
             tossAmount,
             block.timestamp,
             pond.totalTosses,
             pond.totalValue
         );
+        
+        // Gas usage reporting
+        uint256 gasUsed = gasStart - gasleft();
+        emit GasUsageReport("toss", pond.totalParticipants, gasUsed);
     }
 
     /**
-     * @dev Top up a pond's reward pool without becoming a participant
-     * @param _pondType The type of pond to top up
-     * @param _amount Amount of tokens to top up (ignored for native currency)
+     * @dev Gas-optimized top up function
      */
     function topUpPond(bytes32 _pondType, uint256 _amount) external payable whenNotPaused nonReentrant {
         Pond storage pond = ponds[_pondType];
         
-        // Check if pond exists
         if (pond.endTime == 0) revert InvalidPondType();
-        
-        // Check if pond is open
         if (block.timestamp < pond.startTime || block.timestamp > pond.endTime) revert PondNotOpen();
         
         uint256 topUpAmount;
         
-        // Handle different token types
         if (pond.tokenType == TokenType.NATIVE) {
-            // Check proper amount was sent
             if (msg.value == 0) revert AmountTooLow();
             topUpAmount = msg.value;
         } else if (pond.tokenType == TokenType.ERC20) {
-            // Check amount is meaningful
             if (_amount == 0) revert AmountTooLow();
-            
-            // Transfer tokens from user to contract
             IERC20 token = IERC20(pond.tokenAddress);
             token.safeTransferFrom(msg.sender, address(this), _amount);
             topUpAmount = _amount;
@@ -377,161 +423,200 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
             revert TokenNotSupported();
         }
         
-        // Add to total value (but not to totalTosses or totalFrogValue)
         pond.totalValue += uint128(topUpAmount);
         
-        // Emit event
-        emit PondTopUp(
-            _pondType,
-            msg.sender,
-            topUpAmount,
-            block.timestamp,
-            pond.totalValue
-        );
+        emit PondTopUp(_pondType, msg.sender, topUpAmount, block.timestamp, pond.totalValue);
     }
 
     /**
-     * @dev Select a lucky winner and distribute the prize
-     * @param _pondType The pond type to select a winner for
+     * @dev Gas-optimized winner selection with compressed data
      */
     function selectLuckyWinner(bytes32 _pondType) external nonReentrant whenNotPaused {
+        uint256 gasStart = gasleft();
+        
         Pond storage pond = ponds[_pondType];
         
         uint256 effectiveTimelock = pond.period == PondPeriod.FIVE_MINUTES 
-          ? selectionTimelock / 3  // Shorter timelock for 5-min ponds
-          : selectionTimelock;
+          ? config.selectionTimelock / 3
+          : config.selectionTimelock;
 
-        // Check if pond exists
         if (pond.endTime == 0) revert InvalidPondType();
-        
-        // Check if prize already distributed
         if (pond.prizeDistributed) revert PrizeAlreadyDistributed();
-
-        // Check if pond has ended and timelock has passed
         if (block.timestamp <= pond.endTime + effectiveTimelock) revert TimelockActive();
         
-        // Check if pond has participants
         if (pond.totalTosses == 0) {
             _resetPond(_pondType);
             return;
         }
 
-        // Mark as distributed before transfer to prevent reentrancy
         pond.prizeDistributed = true;
 
-        // Select winner using weighted random selection
-        address winner = _selectWeightedRandom(_pondType);
+        // Gas-optimized winner selection
+        address winner = _selectWeightedRandomOptimized(_pondType);
 
-        // Calculate prize and fee
-        uint256 fee = (pond.totalValue * feePercent) / 100;
+        uint256 fee = (pond.totalValue * config.feePercent) / 100;
         uint256 prize = pond.totalValue - fee;
 
-        // Store winner information
-        lastWinner[_pondType] = winner;
-        lastPrize[_pondType] = prize;
-
-        // Distribute prize and fee
         _distributePrize(_pondType, winner, prize, fee);
 
-        // Emit event
         emit LuckyWinnerSelected(_pondType, winner, pond.tokenAddress, prize, msg.sender);
 
-        // Reset the pond
         _resetPond(_pondType);
+        
+        // Gas usage reporting
+        uint256 gasUsed = gasStart - gasleft();
+        emit GasUsageReport("selectWinner", pond.totalParticipants, gasUsed);
     }
 
     /**
-     * @dev Internal function to select a winner using weighted random selection
-     * @param _pondType The pond type to select from
-     * @return winner address
+     * @dev Gas-optimized weighted selection using compressed data
      */
-    function _selectWeightedRandom(bytes32 _pondType) internal view returns (address) {
+    function _selectWeightedRandomOptimized(bytes32 _pondType) internal returns (address) {
         Pond storage pond = ponds[_pondType];
         
-        if (pond.totalFrogValue == 0) return address(0);
+        if (pond.totalFrogValue == 0 || pond.totalTosses == 0) {
+            return address(0);
+        }
+
+        uint256 selectionBlock = block.number;
+        bytes32 recentBlockHash = _getRecentBlockhash();
         
-        // Generate a random value
-        uint256 randomValue = uint256(keccak256(abi.encodePacked(
-            block.timestamp,
+        bytes32 entropy = keccak256(abi.encodePacked(
+            recentBlockHash,
             block.prevrandao,
-            blockhash(block.number - 1),
-            pond.totalTosses
-        ))) % pond.totalFrogValue;
+            pond.totalTosses,
+            pond.totalValue,
+            pond.startTime,
+            address(this),
+            gasleft(),
+            tx.gasprice,
+            block.timestamp
+        ));
         
-        // Weighted selection based on toss amounts
+        uint256 randomValue = uint256(entropy) % pond.totalFrogValue;
+        
+        // Gas-optimized selection using compressed data
         uint256 cumulativeValue = 0;
+        address winner = address(0);
+        CompressedToss[] storage tosses = pondTosses[_pondType];
+        address[] storage pondParticipantsList = pondParticipants[_pondType];
         
-        for (uint256 i = 0; i < pond.totalTosses; i++) {
-            cumulativeValue += pondValues[_pondType][i];
+        for (uint256 i = 0; i < tosses.length; i++) {
+            cumulativeValue += tosses[i].value;
+            
             if (randomValue < cumulativeValue) {
-                return pondParticipants[_pondType][i];
+                winner = pondParticipantsList[tosses[i].participantIndex];
+                break;
             }
         }
         
-        // Fallback - should never reach here if logic is correct
-        return pondParticipants[_pondType][0];
+        if (winner == address(0)) {
+            emit WinnerSelectionDetails(
+                _pondType,
+                address(0),
+                entropy,
+                randomValue,
+                pond.totalFrogValue,
+                cumulativeValue,
+                selectionBlock,
+                recentBlockHash
+            );
+            
+            revert WeightedSelectionFailed();
+        }
+
+        emit WinnerSelectionDetails(
+            _pondType,
+            winner,
+            entropy,
+            randomValue,
+            pond.totalFrogValue,
+            cumulativeValue,
+            selectionBlock,
+            recentBlockHash
+        );
+        
+        return winner;
     }
 
     /**
-     * @dev Distribute prize and fee
-     * @param _pondType The pond type
-     * @param _winner The winner address
-     * @param _prize The prize amount
-     * @param _fee The fee amount
+     * @dev Helper function for better blockhash handling
+     */
+    function _getRecentBlockhash() internal view returns (bytes32) {
+        bytes32 hash = blockhash(block.number - 1);
+        if (hash == bytes32(0)) {
+            hash = blockhash(block.number - 2);
+            if (hash == bytes32(0)) {
+                return bytes32(block.prevrandao);
+            }
+        }
+        return hash;
+    }
+
+    /**
+     * @dev Distribute prize and fee (unchanged)
      */
     function _distributePrize(bytes32 _pondType, address _winner, uint256 _prize, uint256 _fee) internal {
         Pond storage pond = ponds[_pondType];
         
         if (pond.tokenType == TokenType.NATIVE) {
-            // Send prize to winner
             (bool sentWinner, ) = _winner.call{value: _prize}("");
             if (!sentWinner) revert TransferFailed();
 
-            // Send fee to fee address
-            (bool sentFee, ) = feeAddress.call{value: _fee}("");
+            (bool sentFee, ) = config.feeAddress.call{value: _fee}("");
             if (!sentFee) revert TransferFailed();
         } else if (pond.tokenType == TokenType.ERC20) {
-            // Send ERC20 tokens
             IERC20 token = IERC20(pond.tokenAddress);
             token.safeTransfer(_winner, _prize);
-            token.safeTransfer(feeAddress, _fee);
+            token.safeTransfer(config.feeAddress, _fee);
         }
     }
 
     /**
-     * @dev Reset a pond after a winner is selected
-     * @param _pondType The pond type to reset
+     * @dev Gas-optimized pond reset with batch clearing
      */
     function _resetPond(bytes32 _pondType) internal {
         Pond storage pond = ponds[_pondType];
         
         // Store current data for reuse
-        uint64 minTossPrice = pond.minTossPrice;
+        uint128 minTossPrice = pond.minTossPrice;
         uint128 maxTotalAmount = pond.maxTotalTossAmount;
         TokenType tokenType = pond.tokenType;
         address tokenAddress = pond.tokenAddress;
         string memory pondName = pond.pondName;
         PondPeriod period = pond.period;
         
-        // Clear participants data
-        address[] memory allParticipants = participantsList[_pondType];
-        for (uint i = 0; i < allParticipants.length; i++) {
-            delete participants[_pondType][allParticipants[i]];
-        }
-        delete participantsList[_pondType];
+        // Clear data arrays (more gas efficient than individual deletes)
+        delete pondTosses[_pondType];
         
-        // Calculate new time period
+        // Clear participant data in batches if too large
+        address[] storage pondParticipantsList = pondParticipants[_pondType];
+        uint256 participantCount = pondParticipantsList.length;
+        
+        if (participantCount <= config.emergencyBatchSize) {
+            // Small pond - clear everything at once
+            for (uint i = 0; i < participantCount; i++) {
+                address participant = pondParticipantsList[i];
+                delete participants[_pondType][participant];
+                delete participantIndex[_pondType][participant];
+            }
+            delete pondParticipants[_pondType];
+        } else {
+            // Large pond - mark for batch clearing
+            // This would require a separate batch clearing function
+            emit EmergencyAction("largePondReset", address(0), address(0), participantCount, _pondType);
+        }
+        
+        // Calculate new time period (unchanged logic)
         uint256 newStartTime;
         uint256 newEndTime;
         uint256 today = PondUtils.truncateToDay(block.timestamp);
         
         if (period == PondPeriod.FIVE_MINUTES) {
-            // Round to the nearest 5 minutes
             newStartTime = (block.timestamp / FIVE_MINUTES) * FIVE_MINUTES;
             newEndTime = newStartTime + FIVE_MINUTES - 1;
         }
         else if (period == PondPeriod.HOURLY) {
-            // Round to the nearest hour (existing code)
             newStartTime = (block.timestamp / ONE_HOUR) * ONE_HOUR;
             newEndTime = newStartTime + ONE_HOUR - 1;
         }
@@ -550,7 +635,6 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
             newEndTime = PondUtils.getFirstOfMonthTimestamp(block.timestamp + 32 days) - 1;
         }
         else {
-            // For custom ponds, extend by the original duration
             uint256 originalDuration = pond.endTime - pond.startTime;
             newStartTime = block.timestamp;
             newEndTime = block.timestamp + originalDuration;
@@ -560,6 +644,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         pond.startTime = uint64(newStartTime);
         pond.endTime = uint64(newEndTime);
         pond.totalTosses = 0;
+        pond.totalParticipants = 0;
         pond.totalValue = 0;
         pond.totalFrogValue = 0;
         pond.prizeDistributed = false;
@@ -574,56 +659,191 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Remove a custom pond that is no longer needed
-     * @param _pondType The type identifier of the pond to remove
-     * @notice This can only remove custom ponds with no activity
+     * @dev Batch clear participants for large ponds
      */
-    function removePond(bytes32 _pondType) external onlyRole(ADMIN_ROLE) {
-        // Check if pond exists
+    function batchClearParticipants(bytes32 _pondType, uint256 _startIdx, uint256 _endIdx) 
+        external onlyRole(ADMIN_ROLE) {
+        if (_startIdx >= _endIdx) revert InvalidParameters();
+        
+        address[] storage pondParticipantsList = pondParticipants[_pondType];
+        if (_endIdx > pondParticipantsList.length) revert InvalidParameters();
+        
+        for (uint256 i = _startIdx; i < _endIdx; i++) {
+            address participant = pondParticipantsList[i];
+            delete participants[_pondType][participant];
+            delete participantIndex[_pondType][participant];
+        }
+        
+        // If this is the last batch, clear the array
+        if (_endIdx == pondParticipantsList.length) {
+            delete pondParticipants[_pondType];
+        }
+    }
+
+    // =========== Configuration Functions ===========
+
+    /**
+     * @dev Update maximum participants per pond
+     */
+    function updateMaxParticipantsPerPond(uint32 _newMaxParticipants) external onlyRole(ADMIN_ROLE) {
+        uint32 oldMax = config.maxParticipantsPerPond;
+        config.maxParticipantsPerPond = _newMaxParticipants;
+        
+        emit ConfigChanged("maxParticipantsPerPond", bytes32(0), oldMax, _newMaxParticipants, address(0), address(0));
+    }
+
+    /**
+     * @dev Update emergency batch size
+     */
+    function updateEmergencyBatchSize(uint32 _newBatchSize) external onlyRole(ADMIN_ROLE) {
+        if (_newBatchSize == 0) revert InvalidParameters();
+        
+        uint32 oldSize = config.emergencyBatchSize;
+        config.emergencyBatchSize = _newBatchSize;
+        
+        emit ConfigChanged("emergencyBatchSize", bytes32(0), oldSize, _newBatchSize, address(0), address(0));
+    }
+
+    /**
+     * @dev Update fee percent
+     */
+    function setFeePercent(uint32 _newFeePercent) external onlyRole(ADMIN_ROLE) {
+        if (_newFeePercent > 10) revert FeeToHigh();
+        
+        uint32 oldPercent = config.feePercent;
+        config.feePercent = _newFeePercent;
+        
+        emit ConfigChanged("feePercent", bytes32(0), oldPercent, _newFeePercent, address(0), address(0));
+    }
+
+    /**
+     * @dev Set fee address
+     */
+    function setFeeAddress(address _feeAddress) external onlyRole(ADMIN_ROLE) {
+        if (_feeAddress == address(0)) revert ZeroAddress();
+        
+        address oldAddress = config.feeAddress;
+        config.feeAddress = _feeAddress;
+        
+        emit ConfigChanged("feeAddress", bytes32(0), 0, 0, oldAddress, _feeAddress);
+    }
+
+    /**
+     * @dev Update selection timelock
+     */
+    function setSelectionTimelock(uint32 _newTimelock) external onlyRole(ADMIN_ROLE) {
+        uint32 oldTimelock = config.selectionTimelock;
+        config.selectionTimelock = _newTimelock;
+        
+        emit ConfigChanged("selectionTimelock", bytes32(0), oldTimelock, _newTimelock, address(0), address(0));
+    }
+
+    // =========== Emergency Functions ===========
+
+    /**
+     * @dev Gas-optimized emergency refund with configurable batch size
+     */
+    function emergencyRefundBatch(bytes32 _pondType, uint256 _startIdx, uint256 _endIdx) 
+        external onlyRole(ADMIN_ROLE) nonReentrant {
+        Pond storage pond = ponds[_pondType];
+        
+        if (pond.endTime == 0) revert InvalidPondType();
+        
+        address[] storage allParticipants = pondParticipants[_pondType];
+        uint256 totalParticipants = allParticipants.length;
+        
+        if (_startIdx >= totalParticipants) revert InvalidParameters();
+        if (_endIdx > totalParticipants) _endIdx = totalParticipants;
+        if (_startIdx >= _endIdx) revert InvalidParameters();
+        
+        // Check batch size limit
+        if ((_endIdx - _startIdx) > config.emergencyBatchSize) revert InvalidBatchSize();
+        
+        uint256 totalPondValue = pond.totalValue;
+        
+        for (uint i = _startIdx; i < _endIdx; i++) {
+            address participant = allParticipants[i];
+            uint256 participantAmount = participants[_pondType][participant].amount;
+            
+            if (participantAmount > 0) {
+                uint256 refundAmount = (participantAmount * totalPondValue) / pond.totalFrogValue;
+                
+                if (pond.tokenType == TokenType.NATIVE) {
+                    (bool success, ) = participant.call{value: refundAmount}("");
+                    if (!success) continue;
+                } else if (pond.tokenType == TokenType.ERC20) {
+                    IERC20 token = IERC20(pond.tokenAddress);
+                    try token.transfer(participant, refundAmount) {
+                        // Transfer successful
+                    } catch {
+                        continue;
+                    }
+                }
+                
+                emit EmergencyAction("refund", participant, pond.tokenAddress, refundAmount, _pondType);
+            }
+        }
+        
+        if (_endIdx == totalParticipants) {
+            pond.prizeDistributed = true;
+            _resetPond(_pondType);
+        }
+    }
+
+    /**
+     * @dev Emergency reset of a pond
+     */
+    function emergencyResetPond(bytes32 _pondType) external onlyRole(ADMIN_ROLE) {
         Pond storage pond = ponds[_pondType];
         if (pond.endTime == 0) revert InvalidPondType();
         
-        // Check if it's a standard pond (which can't be removed)
+        _resetPond(_pondType);
+        
+        emit EmergencyAction("pondReset", address(0), address(0), 0, _pondType);
+    }
+
+    /**
+     * @dev Remove a custom pond (gas optimized)
+     */
+    function removePond(bytes32 _pondType) external onlyRole(ADMIN_ROLE) {
+        Pond storage pond = ponds[_pondType];
+        if (pond.endTime == 0) revert InvalidPondType();
+        
         if (_isStandardPond(_pondType)) {
             revert StandardPondNotRemovable();
         }
 
-        // Check if the pond has any activity (tosses)
         if (pond.totalTosses > 0) {
             revert CannotRemovePondWithActivity();
         }
                 
-        // Store name for event
         string memory pondName = pond.pondName;
         
-        // Clean up user data
-        address[] memory allParticipants = participantsList[_pondType];
-        for (uint i = 0; i < allParticipants.length; i++) {
-            delete participants[_pondType][allParticipants[i]];
+        // Gas-optimized cleanup
+        delete pondTosses[_pondType];
+        
+        address[] storage allParticipantsList = pondParticipants[_pondType];
+        for (uint i = 0; i < allParticipantsList.length; i++) {
+            delete participants[_pondType][allParticipantsList[i]];
+            delete participantIndex[_pondType][allParticipantsList[i]];
         }
         
-        // Remove the pond
         delete ponds[_pondType];
+        delete pondParticipants[_pondType];
         
-        // Remove from the allPondTypes array using swap and pop for gas efficiency
         _removeFromArray(_pondType);
         
-        // Clear participant data
-        delete participantsList[_pondType];
-        
-        // Emit removal event
         emit PondAction(_pondType, pondName, 0, 0, "removed");
     }
     
     /**
-     * @dev Remove a pond type from the allPondTypes array
-     * @param _pondType The pond type to remove
+     * @dev Remove pond type from array (gas optimized)
      */
     function _removeFromArray(bytes32 _pondType) internal {
-        for (uint i = 0; i < allPondTypes.length; i++) {
+        uint256 length = allPondTypes.length;
+        for (uint i = 0; i < length; i++) {
             if (allPondTypes[i] == _pondType) {
-                // Swap with the last element and pop (gas efficient removal)
-                allPondTypes[i] = allPondTypes[allPondTypes.length - 1];
+                allPondTypes[i] = allPondTypes[length - 1];
                 allPondTypes.pop();
                 break;
             }
@@ -631,9 +851,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Check if a pond type is a standard pond
-     * @param _pondType The pond type to check
-     * @return True if it's a standard pond
+     * @dev Check if pond type is standard
      */
     function _isStandardPond(bytes32 _pondType) internal view returns (bool) {
         return _pondType == FIVE_MIN_POND_TYPE ||
@@ -643,118 +861,20 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
                _pondType == MONTHLY_POND_TYPE;
     }
 
-    // =========== Configuration Functions ===========
+    // =========== Upkeep Functions ===========
 
     /**
-     * @dev Update the minimum toss price for a specific pond
-     * @param _pondType The pond type to update
-     * @param _newMinPrice The new minimum toss price
-     */
-    function updateMinTossPrice(bytes32 _pondType, uint256 _newMinPrice) external onlyRole(POND_MANAGER_ROLE) {
-        Pond storage pond = ponds[_pondType];
-        
-        // Check if pond exists
-        if (pond.endTime == 0) revert InvalidPondType();
-        
-        uint256 oldPrice = pond.minTossPrice;
-        pond.minTossPrice = uint64(_newMinPrice);
-        
-        emit ConfigChanged("minTossPrice", _pondType, oldPrice, _newMinPrice, address(0), address(0));
-    }
-
-    /**
-     * @dev Update the maximum total toss amount per user for a specific pond
-     * @param _pondType The pond type to update
-     * @param _newMaxAmount The new maximum total amount per user
-     */
-    function updateMaxTotalTossAmount(bytes32 _pondType, uint256 _newMaxAmount) external onlyRole(POND_MANAGER_ROLE) {
-        Pond storage pond = ponds[_pondType];
-        
-        // Check if pond exists
-        if (pond.endTime == 0) revert InvalidPondType();
-        
-        uint256 oldMax = pond.maxTotalTossAmount;
-        pond.maxTotalTossAmount = uint128(_newMaxAmount);
-        
-        emit ConfigChanged("maxTotalTossAmount", _pondType, oldMax, _newMaxAmount, address(0), address(0));
-    }
-
-    /**
-     * @dev Update the default minimum toss price for new ponds
-     * @param _newDefaultMinPrice The new default minimum toss price
-     */
-    function updateDefaultMinTossPrice(uint256 _newDefaultMinPrice) external onlyRole(POND_MANAGER_ROLE) {
-        uint256 oldPrice = defaultMinTossPrice;
-        defaultMinTossPrice = _newDefaultMinPrice;
-        
-        emit ConfigChanged("defaultMinTossPrice", bytes32(0), oldPrice, _newDefaultMinPrice, address(0), address(0));
-    }
-
-    /**
-     * @dev Update the default maximum total toss amount for new ponds
-     * @param _newDefaultMaxAmount The new default maximum total amount
-     */
-    function updateDefaultMaxTotalTossAmount(uint256 _newDefaultMaxAmount) external onlyRole(POND_MANAGER_ROLE) {
-        uint256 oldMax = defaultMaxTotalTossAmount;
-        defaultMaxTotalTossAmount = _newDefaultMaxAmount;
-        
-        emit ConfigChanged("defaultMaxTotalTossAmount", bytes32(0), oldMax, _newDefaultMaxAmount, address(0), address(0));
-    }
-
-    /**
-     * @dev Set the fee address
-     * @param _feeAddress The new fee address
-     */
-    function setFeeAddress(address _feeAddress) external onlyRole(ADMIN_ROLE) {
-        if (_feeAddress == address(0)) revert ZeroAddress();
-        
-        address oldAddress = feeAddress;
-        feeAddress = _feeAddress;
-        
-        emit ConfigChanged("feeAddress", bytes32(0), 0, 0, oldAddress, _feeAddress);
-    }
-
-    /**
-     * @dev Update the fee percent
-     * @param _newFeePercent The new fee percentage (out of 100)
-     */
-    function setFeePercent(uint256 _newFeePercent) external onlyRole(ADMIN_ROLE) {
-        if (_newFeePercent > 10) revert FeeToHigh(); // Max 10%
-        
-        uint256 oldPercent = feePercent;
-        feePercent = _newFeePercent;
-        
-        emit ConfigChanged("feePercent", bytes32(0), oldPercent, _newFeePercent, address(0), address(0));
-    }
-
-    /**
-     * @dev Update the selection timelock period
-     * @param _newTimelock The new timelock period in seconds
-     */
-    function setSelectionTimelock(uint256 _newTimelock) external onlyRole(ADMIN_ROLE) {
-        uint256 oldTimelock = selectionTimelock;
-        selectionTimelock = _newTimelock;
-        
-        emit ConfigChanged("selectionTimelock", bytes32(0), oldTimelock, _newTimelock, address(0), address(0));
-    }
-
-    /**
-     * @dev Check if upkeep is needed for any pond
-     * @param performData Data passed to performUpkeep
-     * @return upkeepNeeded True if upkeep is needed, false otherwise
-     * @return performData Data to pass to performUpkeep
+     * @dev Check if upkeep is needed
      */
     function checkUpkeep(bytes calldata) external view returns (bool upkeepNeeded, bytes memory performData) {
-        // Check all ponds to see if any need winner selection
         for (uint i = 0; i < allPondTypes.length; i++) {
             bytes32 pondType = allPondTypes[i];
             Pond storage pond = ponds[pondType];
             
             uint256 effectiveTimelock = pond.period == PondPeriod.FIVE_MINUTES 
-                ? selectionTimelock / 3 
-                : selectionTimelock;
+                ? config.selectionTimelock / 3 
+                : config.selectionTimelock;
                 
-            // Check if pond ended and timelock passed
             if (!pond.prizeDistributed && 
                 block.timestamp > pond.endTime + effectiveTimelock) {
                 return (true, abi.encode(pondType));
@@ -764,8 +884,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Perform upkeep to select a winner
-     * @param performData The data passed from checkUpkeep
+     * @dev Perform upkeep
      */
     function performUpkeep(bytes calldata performData) external {
         bytes32 pondType = abi.decode(performData, (bytes32));
@@ -773,96 +892,21 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Pause the contract
+     * @dev Pause/unpause functions
      */
     function pause() external onlyRole(ADMIN_ROLE) {
         _pause();
     }
 
-    /**
-     * @dev Unpause the contract
-     */
     function unpause() external onlyRole(ADMIN_ROLE) {
         _unpause();
     }
 
+    // =========== View Functions (Gas Optimized) ===========
+
     /**
-     * @dev Emergency reset of a pond
-     * @param _pondType The pond type to reset
+     * @dev Get standard pond types
      */
-    function emergencyResetPond(bytes32 _pondType) external onlyRole(ADMIN_ROLE) {
-        Pond storage pond = ponds[_pondType];
-        if (pond.endTime == 0) revert InvalidPondType();
-        
-        // Reset the pond even if it's in a bad state
-        _resetPond(_pondType);
-        
-        emit EmergencyAction("pondReset", address(0), address(0), 0, _pondType);
-    }
-
-    function emergencyRefundBatch(bytes32 _pondType, uint256 _startIdx, uint256 _endIdx) external onlyRole(ADMIN_ROLE) nonReentrant {
-        Pond storage pond = ponds[_pondType];
-        
-        // Check if pond existss
-        if (pond.endTime == 0) revert InvalidPondType();
-        
-        // Get participants array
-        address[] storage allParticipants = participantsList[_pondType];
-        uint256 totalParticipants = allParticipants.length;
-        
-        // Validate batch indices
-        if (_startIdx >= totalParticipants) revert InvalidParameters();
-        if (_endIdx > totalParticipants) _endIdx = totalParticipants;
-        if (_startIdx >= _endIdx) revert InvalidParameters();
-        
-        uint256 totalPondValue = pond.totalValue;
-        
-        // Process the batch of participants
-        for (uint i = _startIdx; i < _endIdx; i++) {
-            address participant = allParticipants[i];
-            uint256 participantAmount = participants[_pondType][participant].amount;
-            
-            if (participantAmount > 0) {
-                // Calculate proportional refund
-                uint256 refundAmount = (participantAmount * totalPondValue) / pond.totalFrogValue;
-                
-                // Process the refund based on token type
-                if (pond.tokenType == TokenType.NATIVE) {
-                    // Send native tokens
-                    (bool success, ) = participant.call{value: refundAmount}("");
-                    if (!success) continue; // Skip if transfer fails, continue with others
-                } else if (pond.tokenType == TokenType.ERC20) {
-                    // Send ERC20 tokens
-                    IERC20 token = IERC20(pond.tokenAddress);
-                    try token.transfer(participant, refundAmount) {
-                        // Transfer successful
-                    } catch {
-                        // Skip if transfer fails, continue with others
-                        continue;
-                    }
-                }
-                
-                emit EmergencyAction("refund", participant, pond.tokenAddress, refundAmount, _pondType);
-            }
-        }
-        
-        // If this is the last batch, mark as fully processed
-        if (_endIdx == totalParticipants) {
-            pond.prizeDistributed = true;
-            _resetPond(_pondType);
-        }
-    }
-
-    // =========== View Functions ===========
-
-    /**
-    * @dev Get all standard pond types for reference
-    * @return fiveMin 5-minute pond identifier
-    * @return hourly Hourly pond identifier 
-    * @return daily Daily pond identifier
-    * @return weekly Weekly pond identifier
-    * @return monthly Monthly pond identifier
-    */
     function getStandardPondTypes() external view returns (
         bytes32 fiveMin, 
         bytes32 hourly, 
@@ -880,20 +924,17 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Get all pond types that have been created
-     * @return Array of all pond type identifiers
+     * @dev Get all pond types
      */
     function getAllPondTypes() external view returns (bytes32[] memory) {
         return allPondTypes;
     }
 
     /**
-     * @dev Get all participants for a specific pond with their toss amounts
-     * @param _pondType The pond type to query
-     * @return Array of participant info with addresses and toss amounts
+     * @dev Get pond participants (gas optimized)
      */
     function getPondParticipants(bytes32 _pondType) external view returns (ParticipantInfo[] memory) {
-        address[] memory allParticipants = participantsList[_pondType];
+        address[] memory allParticipants = pondParticipants[_pondType];
         ParticipantInfo[] memory result = new ParticipantInfo[](allParticipants.length);
         
         for (uint i = 0; i < allParticipants.length; i++) {
@@ -908,31 +949,14 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
     
     /**
-     * @dev Get user toss amount for a specific pond
-     * @param _pondType The pond type to query
-     * @param _user The user address to query
-     * @return Total amount tossed by this user in the specified pond
+     * @dev Get user toss amount
      */
     function getUserTossAmount(bytes32 _pondType, address _user) external view returns (uint256) {
         return participants[_pondType][_user].amount;
     }
     
     /**
-     * @dev Get comprehensive pond status
-     * @param _pondType The pond type to query
-     * @return name The name of the pond
-     * @return startTime The start time of the pond period
-     * @return endTime The end time of the pond period
-     * @return totalTosses The total number of tosses in the pond
-     * @return totalValue The total value collected in the pond
-     * @return totalParticipants The number of unique participants
-     * @return prizeDistributed Whether the prize has been distributed
-     * @return timeUntilEnd Time remaining until the pond ends
-     * @return minTossPrice Minimum price per toss
-     * @return maxTotalTossAmount Maximum total toss amount per user
-     * @return tokenType Type of token accepted by the pond
-     * @return tokenAddress Address of ERC20 token (if applicable)
-     * @return period Pond period type
+     * @dev Get comprehensive pond status (gas optimized)
      */
     function getPondStatus(bytes32 _pondType) external view returns (
         string memory name,
@@ -951,15 +975,11 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     ) {
         Pond storage pond = ponds[_pondType];
         
-        // Check if pond exists
         if (pond.endTime == 0) revert InvalidPondType();
         
-        uint256 _timeUntilEnd;
-        if (block.timestamp < pond.endTime) {
-            _timeUntilEnd = pond.endTime - block.timestamp;
-        } else {
-            _timeUntilEnd = 0;
-        }
+        uint256 _timeUntilEnd = block.timestamp < pond.endTime 
+            ? pond.endTime - block.timestamp 
+            : 0;
         
         return (
             pond.pondName,
@@ -967,7 +987,7 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
             pond.endTime,
             pond.totalTosses,
             pond.totalValue,
-            participantsList[_pondType].length,
+            pond.totalParticipants,
             pond.prizeDistributed,
             _timeUntilEnd,
             pond.minTossPrice,
@@ -978,34 +998,32 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         );
     }
 
+    /**
+     * @dev Get standard ponds for UI (gas optimized)
+     */
     function getStandardPondsForUI(address _tokenAddress) external view returns (PondDisplayInfo[] memory) {
-        PondDisplayInfo[] memory result = new PondDisplayInfo[](5); // 5 standard types: 5min, hourly, daily, weekly, monthly
+        PondDisplayInfo[] memory result = new PondDisplayInfo[](5);
         
-        // For native token, use predefined IDs
         if (_tokenAddress == address(0)) {
-            // Check if ponds exist and get names
             result[0] = _getPondInfoIfExists(FIVE_MIN_POND_TYPE, "5-Min Pond", PondPeriod.FIVE_MINUTES);
             result[1] = _getPondInfoIfExists(HOURLY_POND_TYPE, "Hourly Pond", PondPeriod.HOURLY);
             result[2] = _getPondInfoIfExists(DAILY_POND_TYPE, "Daily Pond", PondPeriod.DAILY);
             result[3] = _getPondInfoIfExists(WEEKLY_POND_TYPE, "Weekly Pond", PondPeriod.WEEKLY);
             result[4] = _getPondInfoIfExists(MONTHLY_POND_TYPE, "Monthly Pond", PondPeriod.MONTHLY);
         } else {
-            // Generate types for ERC20 token
             bytes32 fiveMinType = keccak256(abi.encodePacked("POND_5MIN", _tokenAddress));
             bytes32 hourlyType = keccak256(abi.encodePacked("POND_HOURLY", _tokenAddress));
             bytes32 dailyType = keccak256(abi.encodePacked("POND_DAILY", _tokenAddress));
             bytes32 weeklyType = keccak256(abi.encodePacked("POND_WEEKLY", _tokenAddress));
             bytes32 monthlyType = keccak256(abi.encodePacked("POND_MONTHLY", _tokenAddress));
             
-            // Get the token symbol if available (fallback to "Token" if not)
             string memory symbol = "Token";
             try IERC20Metadata(_tokenAddress).symbol() returns (string memory s) {
                 symbol = s;
             } catch {
-                // If symbol() call fails, just use "Token"
+                // Use default "Token"
             }
             
-            // Check if ponds exist and get names
             result[0] = _getPondInfoIfExists(fiveMinType, string(abi.encodePacked("5-Min ", symbol, " Pond")), PondPeriod.FIVE_MINUTES);
             result[1] = _getPondInfoIfExists(hourlyType, string(abi.encodePacked("Hourly ", symbol, " Pond")), PondPeriod.HOURLY);
             result[2] = _getPondInfoIfExists(dailyType, string(abi.encodePacked("Daily ", symbol, " Pond")), PondPeriod.DAILY);
@@ -1017,12 +1035,8 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-    * @dev Helper function to get pond info if it exists
-    * @param _pondType The pond type to check
-    * @param _defaultName Default name to use if pond doesn't exist
-    * @param _period The period of the pond
-    * @return Pond display info with existence flag
-    */
+     * @dev Helper function to get pond info if exists
+     */
     function _getPondInfoIfExists(bytes32 _pondType, string memory _defaultName, PondPeriod _period) internal view returns (PondDisplayInfo memory) {
         Pond storage pond = ponds[_pondType];
         bool exists = pond.endTime != 0;
@@ -1036,7 +1050,14 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-    * @dev Allow the contract to receive native currency
-    */
+     * @dev Get current configuration
+     */
+    function getConfig() external view returns (Config memory) {
+        return config;
+    }
+
+    /**
+     * @dev Receive function
+     */
     receive() external payable {}
 }

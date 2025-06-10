@@ -278,6 +278,8 @@ task("query-ponds", "Query all ponds in the system")
 				{ name: "totalTosses", title: "Tosses", alignment: "right" },
 				{ name: "totalParticipants", title: "Users", alignment: "right" },
 				{ name: "formattedValue", title: "Total Value", alignment: "right" },
+				{ name: "formattedMinPrice", title: "Min Toss", alignment: "right" },
+				{ name: "formattedMaxAmount", title: "Max Total", alignment: "right" },
 				{ name: "formattedTimeLeft", title: "Time Left", alignment: "center" },
 			],
 		});
@@ -306,6 +308,8 @@ task("query-ponds", "Query all ponds in the system")
 				totalTosses: pond.totalTosses,
 				totalParticipants: pond.totalParticipants,
 				formattedValue: pond.formattedValue,
+				formattedMinPrice: pond.formattedMinPrice,
+				formattedMaxAmount: pond.formattedMaxAmount,
 				formattedTimeLeft: pond.formattedTimeLeft,
 			};
 
@@ -361,3 +365,7 @@ task("query-ponds", "Query all ponds in the system")
 	});
 
 module.exports = {};
+
+
+// TESTNET npx hardhat query-ponds --network hyperliquid_testnet --all
+// MAINNET npx hardhat query-ponds --network hyperliquid_mainnet --all

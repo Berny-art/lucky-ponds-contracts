@@ -52,15 +52,15 @@ async function main() {
 			process.env[`${configPrefix}_MAX_TOTAL_TOSS_AMOUNT`] || "10",
 		);
 	} catch (error) {
-		console.error("⚠️ Error parsing ETH amounts, using defaults");
+		console.error("⚠️ Error parsing HYPE amounts, using defaults");
 		minTossPrice = ethers.parseEther("0.0001");
 		maxTotalTossAmount = ethers.parseEther("10");
 	}
 
 	console.log("\n💰 Pond Configuration:");
-	console.log(`- 💰 Min Toss Price: ${ethers.formatEther(minTossPrice)} ETH`);
+	console.log(`- 💰 Min Toss Price: ${ethers.formatEther(minTossPrice)} HYPE`);
 	console.log(
-		`- 💸 Max Total Toss Amount: ${ethers.formatEther(maxTotalTossAmount)} ETH`,
+		`- 💸 Max Total Toss Amount: ${ethers.formatEther(maxTotalTossAmount)} HYPE`,
 	);
 
 	// Get deployer account
@@ -69,7 +69,7 @@ async function main() {
 
 	// Check deployer balance
 	const deployerBalance = await ethers.provider.getBalance(deployer.address);
-	console.log(`💎 Balance: ${ethers.formatEther(deployerBalance)} ETH`);
+	console.log(`💎 Balance: ${ethers.formatEther(deployerBalance)} HYPE`);
 
 	// Connect to contracts
 	try {
@@ -106,7 +106,7 @@ async function main() {
 		}
 
 		// Define pond periods to create
-		console.log("\n🌊 Creating native ETH ponds...");
+		console.log("\n🌊 Creating native HYPE ponds...");
 
 		// Define the pond types
 		const periodNames = ["Five-Min", "Hourly", "Daily", "Weekly", "Monthly"];
@@ -169,13 +169,13 @@ async function main() {
 			const period = pondPeriods[pondIndex];
 			const periodName = periodNames[pondIndex];
 
-			console.log(`\n🏊 Creating ${periodName} ETH pond (period ${period})...`);
+			console.log(`\n🏊 Creating ${periodName} HYPE pond (period ${period})...`);
 
 			try {
 				// Create this pond type with high gas settings
 				const tx = await pondFactory.createStandardPonds(
 					ethers.ZeroAddress, // Native ETH
-					"ETH",
+					"HYPE",
 					minTossPrice,
 					maxTotalTossAmount,
 					[period], // Just one period at a time
@@ -211,7 +211,7 @@ async function main() {
 				console.log("⏳ Waiting 3 seconds before next transaction...");
 				await new Promise((resolve) => setTimeout(resolve, 3000));
 			} catch (error) {
-				console.error(`❌ Error with ${periodName} ETH pond: ${error.message}`);
+				console.error(`❌ Error with ${periodName} HYPE pond: ${error.message}`);
 
 				// If it's just a timeout, it might still go through
 				if (error.message.includes("timeout")) {
@@ -306,3 +306,6 @@ main()
 		console.error("❌ Script error:", error);
 		process.exit(1);
 	});
+
+
+	// TESTNET npx hardhat run scripts/create-native-ponds.js --network hyperliquid_testnet

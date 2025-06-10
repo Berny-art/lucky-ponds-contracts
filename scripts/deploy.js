@@ -24,29 +24,16 @@ async function main() {
 		process.env[`${configPrefix}_FEE_ADDRESS`];
 	const existingPondCoreAddress =
 		process.env[`${configPrefix}_POND_CORE_ADDRESS`];
-	const createStandardPonds =
-		process.env[`${configPrefix}_CREATE_STANDARD_PONDS`] === "true";
 
-	// Handle decimal conversion more safely for ETH amounts
-	let minTossPrice;
-	let maxTotalTossAmount;
-	try {
-		minTossPrice = ethers.parseEther(
-			process.env[`${configPrefix}_MIN_TOSS_PRICE`],
-		);
-		maxTotalTossAmount = ethers.parseEther(
-			process.env[`${configPrefix}_MAX_TOTAL_TOSS_AMOUNT`],
-		);
-	} catch (error) {
-		console.error("⚠️ Error parsing ETH amounts, using defaults");
-		minTossPrice = ethers.parseEther("0.1");
-		maxTotalTossAmount = ethers.parseEther("10");
-	}
+	// Updated configuration parameters for optimized contract
 	const selectionTimelock = Number.parseInt(
 		process.env[`${configPrefix}_SELECTION_TIMELOCK`] || "30",
 	);
 	const feePercentage = Number.parseInt(
 		process.env[`${configPrefix}_FEE_PERCENTAGE`] || "7",
+	);
+	const maxParticipantsPerPond = Number.parseInt(
+		process.env[`${configPrefix}_MAX_PARTICIPANTS_PER_POND`] || "3000",
 	);
 
 	if (!feeAddress)
@@ -54,15 +41,9 @@ async function main() {
 
 	console.log("📋 Configuration loaded:");
 	console.log(`- 💼 Fee Address: ${feeAddress}`);
-	console.log(`- 💰 Min Toss Price: ${ethers.formatEther(minTossPrice)} ETH`);
-	console.log(
-		`- 💸 Max Total Toss Amount: ${ethers.formatEther(maxTotalTossAmount)} ETH`,
-	);
 	console.log(`- ⏱️ Selection Timelock: ${selectionTimelock} seconds`);
 	console.log(`- 💹 Fee Percentage: ${feePercentage}%`);
-	console.log(
-		`- 🌊 Create Standard Ponds: ${createStandardPonds ? "✅ Yes" : "❌ No"}`,
-	);
+	console.log(`- 👥 Max Participants Per Pond: ${maxParticipantsPerPond}`);
 
 	if (existingPondCoreAddress) {
 		console.log(`- 🌟 Using existing PondCore: ${existingPondCoreAddress}`);
@@ -78,12 +59,11 @@ async function main() {
 		`💎 Deployer balance: ${ethers.formatEther(deployerBalance)} ETH`,
 	);
 
-	// Define gas limits for complex contracts (customize as needed)
+	// Define gas limits for complex contracts (updated for optimized version)
 	const GAS_LIMITS = {
 		POND_CORE: 15000000,
 		POND_FACTORY: 15000000,
 		GRANT_ROLE: 10000000,
-		CREATE_PONDS: 20000000,
 	};
 
 	console.log("\n⛽ Using gas limits:");
@@ -97,6 +77,7 @@ async function main() {
 		deployer: deployer.address,
 		timestamp: new Date().toISOString(),
 		feeAddress: feeAddress,
+		maxParticipantsPerPond: maxParticipantsPerPond,
 	};
 
 	try {
@@ -131,38 +112,49 @@ async function main() {
 			// Get the PondCore contract instance
 			const pondCore = await ethers.getContractAt("PondCore", pondCoreAddress);
 
-			// Verify key parameters
+			// Verify key parameters for optimized contract
 			try {
-				const actualFeeAddress = await pondCore.feeAddress();
-				if (
-					actualFeeAddress.toLowerCase() !== feeAddress.toLowerCase()
-				) {
+				const config = await pondCore.getConfig();
+				const actualFeeAddress = config.feeAddress;
+				const actualMaxParticipants = config.maxParticipantsPerPond;
+				
+				if (actualFeeAddress.toLowerCase() !== feeAddress.toLowerCase()) {
 					console.warn(
 						`⚠️ WARNING: PondCore fee address (${actualFeeAddress}) does not match provided fee address (${feeAddress})`,
 					);
 				} else {
 					console.log("✅ PondCore fee address matches provided fee address");
 				}
+
+				console.log(`📊 Current max participants per pond: ${actualMaxParticipants}`);
+				if (actualMaxParticipants !== maxParticipantsPerPond) {
+					console.warn(
+						`⚠️ WARNING: PondCore max participants (${actualMaxParticipants}) does not match provided value (${maxParticipantsPerPond})`,
+					);
+				}
 			} catch (error) {
 				console.warn(
 					`⚠️ WARNING: Error verifying PondCore parameters: ${error.message}`,
 				);
+				console.warn("This might be an older version of PondCore without getConfig() function");
 			}
 		} else {
-			// 1. Deploy PondCore
-			console.log("\n1️⃣ Deploying PondCore...");
+			// 1. Deploy PondCore with new constructor parameters
+			console.log("\n1️⃣ Deploying Optimized PondCore...");
 			console.log("📝 PondCore constructor parameters:");
 			console.log(`- 💼 Fee Address: ${feeAddress}`);
 			console.log(`- 💹 Fee Percentage: ${feePercentage}`);
 			console.log(`- ⏱️ Selection Timelock: ${selectionTimelock} seconds`);
+			console.log(`- 👥 Max Participants Per Pond: ${maxParticipantsPerPond}`);
 
 			const PondCore = await ethers.getContractFactory("PondCore");
 
-			// Deploy with high gas limit for complex contract
+			// Deploy with updated constructor parameters
 			const pondCore = await PondCore.deploy(
 				feeAddress,
 				feePercentage,
 				selectionTimelock,
+				maxParticipantsPerPond, // New parameter
 				{ gasLimit: GAS_LIMITS.POND_CORE },
 			);
 
@@ -174,8 +166,21 @@ async function main() {
 			await pondCore.waitForDeployment();
 			pondCoreAddress = await pondCore.getAddress();
 
-			console.log(`🎉 PondCore deployed to: ${pondCoreAddress}`);
+			console.log(`🎉 Optimized PondCore deployed to: ${pondCoreAddress}`);
 			deploymentInfo.pondCore = pondCoreAddress;
+
+			// Verify deployment by checking configuration
+			try {
+				const config = await pondCore.getConfig();
+				console.log("✅ PondCore configuration verified:");
+				console.log(`- Fee Address: ${config.feeAddress}`);
+				console.log(`- Fee Percentage: ${config.feePercent}%`);
+				console.log(`- Selection Timelock: ${config.selectionTimelock}s`);
+				console.log(`- Max Participants: ${config.maxParticipantsPerPond}`);
+				console.log(`- Emergency Batch Size: ${config.emergencyBatchSize}`);
+			} catch (error) {
+				console.warn(`⚠️ Could not verify configuration: ${error.message}`);
+			}
 		}
 
 		// 2. Deploy PondFactory
@@ -241,6 +246,7 @@ async function main() {
 			console.log("\n=== 🚀 DEPLOYMENT SUMMARY 🚀 ===");
 			console.log(`🌐 Network: ${networkName}`);
 			console.log(`💼 Fee Address: ${feeAddress}`);
+			console.log(`👥 Max Participants: ${maxParticipantsPerPond}`);
 			console.log(`🌟 PondCore: ${pondCoreAddress}`);
 			if (deploymentInfo.pondFactory) {
 				console.log(`🏭 PondFactory: ${deploymentInfo.pondFactory}`);
@@ -259,6 +265,15 @@ async function main() {
 					`${configPrefix}_POND_FACTORY_ADDRESS=${deploymentInfo.pondFactory}`,
 				);
 			}
+			console.log(`${configPrefix}_MAX_PARTICIPANTS_PER_POND=${maxParticipantsPerPond}`);
+
+			// Additional deployment notes
+			console.log("\n📋 Post-deployment notes:");
+			console.log("- Standard ponds can be created through the PondFactory");
+			console.log("- Use updateMaxParticipantsPerPond() to adjust limits after deployment");
+			console.log("- Monitor ParticipantLimitWarning events for capacity management");
+			console.log("- Gas usage will be automatically reported via GasUsageReport events");
+
 		} catch (error) {
 			console.error("\n❌ Error during deployment:");
 			console.error(error);
@@ -307,99 +322,7 @@ async function main() {
 
 			throw error;
 		}
-		// 5. Create standard ponds if enabled
-		if (createStandardPonds) {
-			console.log("\n5️⃣ Creating standard ponds...");
 
-			// Define pond periods to create (all standard periods)
-			const pondPeriods = [0, 1, 2, 3, 4]; // Five-min, Hourly, Daily, Weekly, Monthly
-
-			// Create native ETH ponds
-			console.log("🌊 Creating native ETH ponds...");
-
-			try {
-				// Create ponds with high gas limit
-				const tx2 = await pondFactory.createStandardPonds(
-					ethers.ZeroAddress, // Native ETH
-					"ETH",
-					minTossPrice,
-					maxTotalTossAmount,
-					pondPeriods,
-					{
-						gasLimit: GAS_LIMITS.CREATE_PONDS,
-					},
-				);
-
-				console.log(`📤 Create standard ponds transaction sent: ${tx2.hash}`);
-				await tx2.wait();
-				console.log("✅ ETH ponds created successfully");
-			} catch (error) {
-				console.error(`❌ Failed to create ETH ponds: ${error.message}`);
-				// Continue with other tokens even if ETH ponds fail
-			}
-
-			// Create ERC20 token ponds if any tokens are specified
-			const defaultTokensEnv = process.env[`${configPrefix}_DEFAULT_TOKENS`];
-			if (defaultTokensEnv) {
-				const defaultTokens = defaultTokensEnv.split(",");
-				console.log(
-					`🪙 Found ${defaultTokens.length} tokens to set up ponds for`,
-				);
-
-				for (const tokenAddress of defaultTokens) {
-					// Get token symbol (try with error handling)
-					let symbol = "TOKEN";
-					try {
-						const tokenContract = await ethers.getContractAt(
-							"IERC20Metadata",
-							tokenAddress,
-						);
-						symbol = await tokenContract.symbol();
-					} catch (error) {
-						console.warn(
-							`⚠️ Could not get symbol for token ${tokenAddress}, using default`,
-						);
-					}
-
-					console.log(`🪙 Creating ponds for ${symbol} (${tokenAddress})...`);
-
-					try {
-						// Register token with high gas limit
-						const tx3 = await pondFactory.addSupportedToken(
-							tokenAddress,
-							symbol,
-							{
-								gasLimit: GAS_LIMITS.GRANT_ROLE,
-							},
-						);
-
-						console.log(`📤 Register token transaction sent: ${tx3.hash}`);
-						await tx3.wait();
-
-						// Create token ponds with high gas limit
-						const tx4 = await pondFactory.createStandardPonds(
-							tokenAddress,
-							symbol,
-							minTossPrice,
-							maxTotalTossAmount,
-							pondPeriods,
-							{
-								gasLimit: GAS_LIMITS.CREATE_PONDS,
-							},
-						);
-
-						console.log(`📤 Create token ponds transaction sent: ${tx4.hash}`);
-						await tx4.wait();
-						console.log(`✅ ${symbol} ponds created successfully`);
-					} catch (error) {
-						console.error(
-							`❌ Failed to create ponds for ${symbol}: ${error.message}`,
-						);
-						// Continue with other tokens
-					}
-				}
-			}
-		}
 	} catch (factoryError) {
 		console.error(`❌ PondFactory deployment failed: ${factoryError.message}`);
 		console.error(factoryError);
@@ -418,3 +341,5 @@ main()
 		console.error("❌ Deployment error:", error);
 		process.exit(1);
 	});
+
+	// TESTNET npx hardhat run scripts/deploy.js --network hyperliquid_testnet

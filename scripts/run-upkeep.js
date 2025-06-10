@@ -233,3 +233,6 @@ main()
 		console.error("❌ Script error:", error);
 		process.exit(1);
 	});
+
+
+// TESTNET npx hardhat run scripts/run-upkeep.js --network hyperliquid_testnet
