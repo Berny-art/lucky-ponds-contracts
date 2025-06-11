@@ -141,6 +141,8 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
     mapping(bytes32 => address[]) public pondParticipants;        // Participants by index
     mapping(bytes32 => mapping(address => PackedParticipant)) public participants;
     mapping(bytes32 => mapping(address => uint32)) public participantIndex; // Address to index mapping
+    mapping(bytes32 => address) public lastWinner;
+    mapping(bytes32 => uint256) public lastPrize;
     
     // All pond types for iteration
     bytes32[] public allPondTypes;
@@ -457,6 +459,10 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         uint256 fee = (pond.totalValue * config.feePercent) / 100;
         uint256 prize = pond.totalValue - fee;
 
+        // Store winner information
+        lastWinner[_pondType] = winner;
+        lastPrize[_pondType] = prize;
+
         _distributePrize(_pondType, winner, prize, fee);
 
         emit LuckyWinnerSelected(_pondType, winner, pond.tokenAddress, prize, msg.sender);
@@ -736,6 +742,32 @@ contract PondCore is AccessControl, Pausable, ReentrancyGuard {
         config.selectionTimelock = _newTimelock;
         
         emit ConfigChanged("selectionTimelock", bytes32(0), oldTimelock, _newTimelock, address(0), address(0));
+    }
+
+    /**
+    * @dev Update minimum toss price for a specific pond
+    */
+    function updatePondMinTossPrice(bytes32 _pondType, uint128 _newMinTossPrice) external onlyRole(ADMIN_ROLE) {
+        Pond storage pond = ponds[_pondType];
+        if (pond.endTime == 0) revert InvalidPondType();
+        
+        uint128 oldMinToss = pond.minTossPrice;
+        pond.minTossPrice = _newMinTossPrice;
+        
+        emit ConfigChanged("pondMinTossPrice", _pondType, oldMinToss, _newMinTossPrice, address(0), address(0));
+    }
+
+    /**
+    * @dev Update maximum total toss amount for a specific pond
+    */
+    function updatePondMaxTotalTossAmount(bytes32 _pondType, uint128 _newMaxTotalTossAmount) external onlyRole(ADMIN_ROLE) {
+        Pond storage pond = ponds[_pondType];
+        if (pond.endTime == 0) revert InvalidPondType();
+        
+        uint128 oldMaxTotal = pond.maxTotalTossAmount;
+        pond.maxTotalTossAmount = _newMaxTotalTossAmount;
+        
+        emit ConfigChanged("pondMaxTotalTossAmount", _pondType, oldMaxTotal, _newMaxTotalTossAmount, address(0), address(0));
     }
 
     // =========== Emergency Functions ===========

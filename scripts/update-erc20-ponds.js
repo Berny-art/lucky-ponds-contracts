@@ -27,13 +27,13 @@ async function main() {
 
     // Configuration - UPDATE THESE VALUES
     const TOKEN_ADDRESS = "0x47bb061C0204Af921F43DC73C7D7768d2672DdEE"; // Replace with your ERC20 token address
-    const NEW_MIN_TOSS = ethers.parseEther("100.0"); // Replace with your desired minimum toss amount
-    const NEW_MAX_TOTAL = ethers.parseEther("10000.0"); // Replace with your desired maximum total amount
+    const NEW_MIN_TOSS = ethers.parseUnits("100", 6); // Replace with your desired minimum toss amount
+    const NEW_MAX_TOTAL = ethers.parseUnits("10000", 6); // Replace with your desired maximum total amount
 
     console.log("\n🎯 Update Configuration:");
     console.log(`- Token Address: ${TOKEN_ADDRESS}`);
-    console.log(`- New Min Toss: ${ethers.formatEther(NEW_MIN_TOSS)} tokens`);
-    console.log(`- New Max Total: ${ethers.formatEther(NEW_MAX_TOTAL)} tokens`);
+    console.log(`- New Min Toss: ${ethers.formatUnits(NEW_MIN_TOSS, 6)} tokens`);
+    console.log(`- New Max Total: ${ethers.formatUnits(NEW_MAX_TOTAL, 6)} tokens`);
 
     // Get deployer account
     const [deployer] = await ethers.getSigners();
@@ -107,7 +107,7 @@ async function main() {
                     timelock: 0 // Placeholder - would need correct position from contract
                 });
 
-                console.log(`✅ ${pondName} exists - Min: ${ethers.formatEther(currentMinToss)}, Max: ${ethers.formatEther(currentMaxTotal)}`);
+                console.log(`✅ ${pondName} exists - Min: ${ethers.formatUnits(currentMinToss, 6)}, Max: ${ethers.formatUnits(currentMaxTotal, 6)}`);
                 console.log(`   📍 Pond Address: ${pondStatus[0]}`);
                 
             } catch (e) {
@@ -132,7 +132,7 @@ async function main() {
                             feePercentage: 0,
                             timelock: 0
                         });
-                        console.log(`✅ ${pondName} settings retrieved - Min: ${ethers.formatEther(currentMinToss)}, Max: ${ethers.formatEther(currentMaxTotal)}`);
+                        console.log(`✅ ${pondName} settings retrieved - Min: ${ethers.formatUnits(currentMinToss, 6)}, Max: ${ethers.formatUnits(currentMaxTotal, 6)}`);
                     } catch (settingsError) {
                         console.log(`❌ Could not get settings for ${pondName}: ${settingsError.message}`);
                     }
@@ -187,7 +187,7 @@ async function main() {
 
                 // Update min toss price if needed
                 if (pond.currentMinToss !== NEW_MIN_TOSS) {
-                    console.log(`🔧 Updating min toss price from ${ethers.formatEther(pond.currentMinToss)} to ${ethers.formatEther(NEW_MIN_TOSS)}...`);
+                    console.log(`🔧 Updating min toss price from ${ethers.formatUnits(pond.currentMinToss, 6)} to ${ethers.formatUnits(NEW_MIN_TOSS, 6)}...`);
                     const minTossTx = await pondCore.updateMinTossPrice(
                         pond.hash,
                         NEW_MIN_TOSS,
@@ -208,7 +208,7 @@ async function main() {
 
                 // Update max total toss amount if needed
                 if (pond.currentMaxTotal !== NEW_MAX_TOTAL) {
-                    console.log(`🔧 Updating max total from ${ethers.formatEther(pond.currentMaxTotal)} to ${ethers.formatEther(NEW_MAX_TOTAL)}...`);
+                    console.log(`🔧 Updating max total from ${ethers.formatUnits(pond.currentMaxTotal, 6)} to ${ethers.formatUnits(NEW_MAX_TOTAL, 6)}...`);
                     const maxTotalTx = await pondCore.updateMaxTotalTossAmount(
                         pond.hash,
                         NEW_MAX_TOTAL,
@@ -279,8 +279,8 @@ async function main() {
             pondCore: pondCoreAddress,
             tokenAddress: TOKEN_ADDRESS,
             newSettings: {
-                minToss: ethers.formatEther(NEW_MIN_TOSS),
-                maxTotal: ethers.formatEther(NEW_MAX_TOTAL)
+                minToss: ethers.formatUnits(NEW_MIN_TOSS, 6),
+                maxTotal: ethers.formatUnits(NEW_MAX_TOTAL, 6)
             },
             summary: {
                 totalPonds: existingPonds.length,
@@ -294,8 +294,8 @@ async function main() {
                 address: pond.address,
                 hash: pond.hash,
                 previousSettings: {
-                    minToss: ethers.formatEther(pond.currentMinToss),
-                    maxTotal: ethers.formatEther(pond.currentMaxTotal),
+                    minToss: ethers.formatUnits(pond.currentMinToss, 6),
+                    maxTotal: ethers.formatUnits(pond.currentMaxTotal, 6),
                     feePercentage: pond.feePercentage.toString(),
                     timelock: pond.timelock.toString()
                 }
