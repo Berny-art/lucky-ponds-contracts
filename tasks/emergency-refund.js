@@ -33,7 +33,7 @@ task("emergency-refund", "Execute emergency refund for a pond in batches")
 		);
 
 		// Get addresses from environment
-		const pondCoreAddress = process.env[`${configPrefix}_POND_CORE_ADDRESS`];
+		const pondCoreAddress = '0x41E5a45c2287b2A096DFbDD8919cEf6222324Dbc';
 		const privateKey = process.env.PRIVATE_KEY;
 
 		if (!pondCoreAddress || !ethers.isAddress(pondCoreAddress)) {

@@ -7,9 +7,10 @@ async function main() {
 	console.log("🚀 Creating ERC20 pond for single token...");
 
 	// ===== CONFIGURATION - EDIT THESE VALUES =====
-	const TOKEN_ADDRESS = "0x7DCfFCb06B40344eecED2d1Cbf096B299fE4b405"; // Replace with your token address
-	const MIN_TOSS_PRICE = ethers.parseEther("0.000002"); // Minimum toss amount (in token units)
-	const MAX_TOTAL_TOSS_AMOUNT = ethers.parseEther("0.0002"); // Maximum total amount per user (in token units)
+	const TOKEN_ADDRESS = "0x47bb061C0204Af921F43DC73C7D7768d2672DdEE";
+	const DECIMALS = 6; // Token decimals (6 for BUDDY, 18 for most tokens)
+	const MIN_TOSS_PRICE = ethers.parseUnits("100", DECIMALS); // Minimum toss amount (in token units)
+	const MAX_TOTAL_TOSS_AMOUNT = ethers.parseUnits("10000", DECIMALS); // Maximum total amount per user (in token units)
 	
 	// Pond types to create (comment out any you don't want)
 	const PONDS_TO_CREATE = [
@@ -58,8 +59,9 @@ async function main() {
 	console.log(`- 🌟 PondCore: ${pondCoreAddress}`);
 	console.log(`- 🏭 PondFactory: ${pondFactoryAddress}`);
 	console.log(`- 🪙 Token Address: ${TOKEN_ADDRESS}`);
-	console.log(`- 💰 Min Toss Price: ${ethers.formatEther(MIN_TOSS_PRICE)} tokens`);
-	console.log(`- 💸 Max Total Toss Amount: ${ethers.formatEther(MAX_TOTAL_TOSS_AMOUNT)} tokens`);
+	console.log(`- 🔢 Token Decimals: ${DECIMALS}`);
+	console.log(`- 💰 Min Toss Price: ${ethers.formatUnits(MIN_TOSS_PRICE, DECIMALS)} tokens`);
+	console.log(`- 💸 Max Total Toss Amount: ${ethers.formatUnits(MAX_TOTAL_TOSS_AMOUNT, DECIMALS)} tokens`);
 	console.log(`- 🏊 Ponds to create: ${PONDS_TO_CREATE.map(p => p.name).join(", ")}`);
 
 	// Get deployer account
