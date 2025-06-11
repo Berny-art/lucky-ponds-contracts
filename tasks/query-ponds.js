@@ -6,7 +6,31 @@ function formatDate(timestamp) {
 	return new Date(timestamp * 1000).toLocaleString();
 }
 
-// Helper function to format ETH amounts
+// Helper function to format token amounts with correct decimals
+async function formatTokenAmount(amount, tokenType, tokenAddress, tokenSymbol = null, decimals = null, ethersInstance = null) {
+	if (tokenType === 0) {
+		// Native ETH
+		return `${ethersInstance ? ethersInstance.formatEther(amount) : ethers.formatEther(amount)} ETH`;
+	} else if (tokenType === 1 && tokenAddress && tokenAddress !== (ethersInstance ? ethersInstance.ZeroAddress : ethers.ZeroAddress)) {
+		// ERC20 token
+		try {
+			if (decimals === null && ethersInstance) {
+				const tokenContract = await ethersInstance.getContractAt("IERC20Metadata", tokenAddress);
+				decimals = await tokenContract.decimals();
+			}
+			const symbol = tokenSymbol || "TOKEN";
+			return `${ethersInstance ? ethersInstance.formatUnits(amount, decimals) : ethers.formatUnits(amount, decimals)} ${symbol}`;
+		} catch (error) {
+			// Fallback to ETH formatting if we can't get decimals
+			return `${ethersInstance ? ethersInstance.formatEther(amount) : ethers.formatEther(amount)} TOKEN`;
+		}
+	} else {
+		// Fallback
+		return `${ethersInstance ? ethersInstance.formatEther(amount) : ethers.formatEther(amount)} TOKEN`;
+	}
+}
+
+// Helper function to format ETH amounts (legacy support)
 function formatEther(amount) {
 	return `${ethers.formatEther(amount)} ETH`;
 }
@@ -45,6 +69,7 @@ const PERIOD_TYPES = {
 
 task("query-ponds", "Query all ponds in the system")
 	.addOptionalParam("core", "PondCore address (will use env if not provided)")
+	.addOptionalParam("contract", "Custom PondCore contract address to use instead of deployed one")
 	.addFlag("all", "Show all ponds, not just standard ones")
 	.addFlag("active", "Show only active ponds")
 	.addFlag("extended", "Show extended details for each pond")
@@ -66,7 +91,7 @@ task("query-ponds", "Query all ponds in the system")
 
 		// Get PondCore address - from task args or environment
 		const pondCoreAddress =
-			taskArgs.core || process.env[`${configPrefix}_POND_CORE_ADDRESS`];
+			taskArgs.contract || taskArgs.core || process.env[`${configPrefix}_POND_CORE_ADDRESS`];
 
 		if (!pondCoreAddress || !ethers.isAddress(pondCoreAddress)) {
 			throw new Error(
@@ -120,6 +145,7 @@ task("query-ponds", "Query all ponds in the system")
 
 		// Check each pond and collect data
 		const standardPondData = [];
+		const tokenCache = {}; // Cache token info to avoid redundant calls
 
 		console.log("\n🔍 Checking standard pond status...");
 		for (const [name, pondType] of Object.entries(standardPonds)) {
@@ -145,15 +171,40 @@ task("query-ponds", "Query all ponds in the system")
 					period: Number(status[12]),
 				};
 
-				// Format for display
+				// Get token info if it's an ERC20 token
+				let tokenSymbol = "ETH";
+				let tokenDecimals = 18;
+				
+				if (pondData.tokenType === 1 && pondData.tokenAddress !== ethers.ZeroAddress) {
+					if (!tokenCache[pondData.tokenAddress]) {
+						try {
+							const tokenContract = await ethers.getContractAt("IERC20Metadata", pondData.tokenAddress);
+							tokenSymbol = await tokenContract.symbol();
+							tokenDecimals = await tokenContract.decimals();
+							tokenCache[pondData.tokenAddress] = { symbol: tokenSymbol, decimals: tokenDecimals };
+						} catch (error) {
+							console.warn(`⚠️ Could not fetch token info for ${pondData.tokenAddress}: ${error.message}`);
+							tokenSymbol = "TOKEN";
+							tokenDecimals = 18;
+							tokenCache[pondData.tokenAddress] = { symbol: tokenSymbol, decimals: tokenDecimals };
+						}
+					} else {
+						tokenSymbol = tokenCache[pondData.tokenAddress].symbol;
+						tokenDecimals = tokenCache[pondData.tokenAddress].decimals;
+					}
+				}
+
+				// Format for display with correct decimals
 				pondData.formattedStartTime = formatDate(pondData.startTime);
 				pondData.formattedEndTime = formatDate(pondData.endTime);
-				pondData.formattedValue = formatEther(pondData.totalValue);
-				pondData.formattedMinPrice = formatEther(pondData.minTossPrice);
-				pondData.formattedMaxAmount = formatEther(pondData.maxTotalTossAmount);
+				pondData.formattedValue = await formatTokenAmount(pondData.totalValue, pondData.tokenType, pondData.tokenAddress, tokenSymbol, tokenDecimals, ethers);
+				pondData.formattedMinPrice = await formatTokenAmount(pondData.minTossPrice, pondData.tokenType, pondData.tokenAddress, tokenSymbol, tokenDecimals, ethers);
+				pondData.formattedMaxAmount = await formatTokenAmount(pondData.maxTotalTossAmount, pondData.tokenType, pondData.tokenAddress, tokenSymbol, tokenDecimals, ethers);
 				pondData.formattedTimeLeft = formatTimeRemaining(pondData.timeUntilEnd);
 				pondData.tokenTypeName = TOKEN_TYPES[pondData.tokenType];
 				pondData.periodName = PERIOD_TYPES[pondData.period];
+				pondData.tokenSymbol = tokenSymbol;
+				pondData.tokenDecimals = tokenDecimals;
 				pondData.status = pondData.timeUntilEnd > 0 ? "Active" : "Ended";
 
 				// Only add if all ponds requested, or it's active and only active requested
@@ -195,38 +246,43 @@ task("query-ponds", "Query all ponds in the system")
 						period: Number(status[12]),
 					};
 
-					// Format for display
-					pondData.formattedStartTime = formatDate(pondData.startTime);
-					pondData.formattedEndTime = formatDate(pondData.endTime);
-					pondData.formattedValue = formatEther(pondData.totalValue);
-					pondData.formattedMinPrice = formatEther(pondData.minTossPrice);
-					pondData.formattedMaxAmount = formatEther(
-						pondData.maxTotalTossAmount,
-					);
-					pondData.formattedTimeLeft = formatTimeRemaining(
-						pondData.timeUntilEnd,
-					);
-					pondData.tokenTypeName = TOKEN_TYPES[pondData.tokenType];
-					pondData.periodName = PERIOD_TYPES[pondData.period];
-					pondData.status = pondData.timeUntilEnd > 0 ? "Active" : "Ended";
-
-					// Check if it's a token, try to get the symbol
-					if (
-						pondData.tokenType === 1 &&
-						pondData.tokenAddress !== ethers.ZeroAddress
-					) {
-						try {
-							const tokenContract = await ethers.getContractAt(
-								"IERC20Metadata",
-								pondData.tokenAddress,
-							);
-							const symbol = await tokenContract.symbol();
-							pondData.name = `${symbol} ${pondData.periodName} Pond`;
-							pondData.tokenSymbol = symbol;
-						} catch (e) {
-							pondData.tokenSymbol = "Unknown";
+					// Get token info if it's an ERC20 token
+					let tokenSymbol = "ETH";
+					let tokenDecimals = 18;
+					
+					if (pondData.tokenType === 1 && pondData.tokenAddress !== ethers.ZeroAddress) {
+						if (!tokenCache[pondData.tokenAddress]) {
+							try {
+								const tokenContract = await ethers.getContractAt("IERC20Metadata", pondData.tokenAddress);
+								tokenSymbol = await tokenContract.symbol();
+								tokenDecimals = await tokenContract.decimals();
+								tokenCache[pondData.tokenAddress] = { symbol: tokenSymbol, decimals: tokenDecimals };
+								pondData.name = `${tokenSymbol} ${pondData.periodName} Pond`;
+							} catch (error) {
+								console.warn(`⚠️ Could not fetch token info for ${pondData.tokenAddress}: ${error.message}`);
+								tokenSymbol = "TOKEN";
+								tokenDecimals = 18;
+								tokenCache[pondData.tokenAddress] = { symbol: tokenSymbol, decimals: tokenDecimals };
+							}
+						} else {
+							tokenSymbol = tokenCache[pondData.tokenAddress].symbol;
+							tokenDecimals = tokenCache[pondData.tokenAddress].decimals;
+							pondData.name = `${tokenSymbol} ${pondData.periodName} Pond`;
 						}
 					}
+
+					// Format for display with correct decimals
+					pondData.formattedStartTime = formatDate(pondData.startTime);
+					pondData.formattedEndTime = formatDate(pondData.endTime);
+					pondData.formattedValue = await formatTokenAmount(pondData.totalValue, pondData.tokenType, pondData.tokenAddress, tokenSymbol, tokenDecimals, ethers);
+					pondData.formattedMinPrice = await formatTokenAmount(pondData.minTossPrice, pondData.tokenType, pondData.tokenAddress, tokenSymbol, tokenDecimals, ethers);
+					pondData.formattedMaxAmount = await formatTokenAmount(pondData.maxTotalTossAmount, pondData.tokenType, pondData.tokenAddress, tokenSymbol, tokenDecimals, ethers);
+					pondData.formattedTimeLeft = formatTimeRemaining(pondData.timeUntilEnd);
+					pondData.tokenTypeName = TOKEN_TYPES[pondData.tokenType];
+					pondData.periodName = PERIOD_TYPES[pondData.period];
+					pondData.tokenSymbol = tokenSymbol;
+					pondData.tokenDecimals = tokenDecimals;
+					pondData.status = pondData.timeUntilEnd > 0 ? "Active" : "Ended";
 
 					// Only add if all ponds requested, or it's active and only active requested
 					if (!taskArgs.active || pondData.timeUntilEnd > 0) {

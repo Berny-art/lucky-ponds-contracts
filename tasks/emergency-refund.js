@@ -15,6 +15,7 @@ task("emergency-refund", "Execute emergency refund for a pond in batches")
 	)
 	.addOptionalParam("startindex", "Starting index for batch processing", "0")
 	.addOptionalParam("endindex", "Ending index for batch processing (optional)")
+	.addOptionalParam("contract", "Custom PondCore contract address to use instead of deployed one")
 	.addFlag("dryrun", "Simulate the transaction without executing")
 	.setAction(async (taskArgs, hre) => {
 		const { ethers } = hre;
@@ -32,8 +33,43 @@ task("emergency-refund", "Execute emergency refund for a pond in batches")
 			`🌐 Network: ${networkName} (${isTestnet ? "🧪 Testnet" : "🔴 Mainnet"})`,
 		);
 
-		// Get addresses from environment
-		const pondCoreAddress = '0x41E5a45c2287b2A096DFbDD8919cEf6222324Dbc';
+		// Get addresses from environment or deployment files
+		let pondCoreAddress = taskArgs.contract || process.env[`${configPrefix}_POND_CORE_ADDRESS`];
+		
+		// If contract parameter provided, use it
+		if (taskArgs.contract) {
+			console.log(`🎯 Using custom contract address: ${taskArgs.contract}`);
+		}
+		// If not in environment, try to load from latest deployment
+		else if (!pondCoreAddress) {
+			try {
+				const fs = require('fs');
+				const path = require('path');
+				const deploymentsDir = path.join(__dirname, '..', 'deployments');
+				const files = fs.readdirSync(deploymentsDir);
+				
+				// Find the latest deployment file for this network
+				const networkFiles = files.filter(f => f.includes(networkName) && f.endsWith('.json'));
+				if (networkFiles.length > 0) {
+					// Sort by timestamp (assuming filename format includes timestamp)
+					networkFiles.sort().reverse();
+					const latestDeployment = networkFiles[0];
+					const deploymentPath = path.join(deploymentsDir, latestDeployment);
+					const deployment = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'));
+					pondCoreAddress = deployment.PondCore;
+					console.log(`📂 Using PondCore from deployment: ${latestDeployment}`);
+				}
+			} catch (error) {
+				console.warn(`⚠️  Could not load deployment file: ${error.message}`);
+			}
+		}
+		
+		// Fallback to hardcoded address if nothing found
+		if (!pondCoreAddress) {
+			pondCoreAddress = '0x215126f193C19b460e109Dceae149EDfd30B6FDe'; // Updated to correct address
+			console.log(`⚠️  Using fallback PondCore address`);
+		}
+		
 		const privateKey = process.env.PRIVATE_KEY;
 
 		if (!pondCoreAddress || !ethers.isAddress(pondCoreAddress)) {
@@ -60,7 +96,28 @@ task("emergency-refund", "Execute emergency refund for a pond in batches")
 
 		// Parse pond type
 		let pondType = taskArgs.pondtype;
-		if (!pondType.startsWith("0x")) {
+		
+		// Handle different pond type formats
+		if (pondType.startsWith("0x")) {
+			// If it's a hex string, check if it's properly formatted as bytes32
+			if (pondType.length !== 66) { // 0x + 64 hex characters = 66 total
+				// If it's a shorter hex string, try to decode it as a string first
+				try {
+					// Remove 0x prefix and convert hex to string
+					const hexWithoutPrefix = pondType.slice(2);
+					const decodedString = Buffer.from(hexWithoutPrefix, 'hex').toString('utf8');
+					// Re-encode as proper bytes32
+					pondType = ethers.encodeBytes32String(decodedString);
+					console.log(`🔧 Converted hex to string "${decodedString}" and re-encoded as bytes32`);
+				} catch (error) {
+					// If conversion fails, pad the hex string to 32 bytes
+					const hexWithoutPrefix = pondType.slice(2);
+					pondType = "0x" + hexWithoutPrefix.padEnd(64, '0');
+					console.log(`🔧 Padded short hex string to bytes32`);
+				}
+			}
+		} else {
+			// If it's a plain string, encode it as bytes32
 			pondType = ethers.encodeBytes32String(pondType);
 		}
 
@@ -320,3 +377,6 @@ task("emergency-refund", "Execute emergency refund for a pond in batches")
 	});
 
 module.exports = {};
+
+
+// npx hardhat emergency-refund --pondtype 0x706f6e645f74797065 --batchsize 5 --startindex 0

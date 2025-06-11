@@ -7,10 +7,16 @@ async function main() {
 	console.log("🚀 Creating ERC20 pond for single token...");
 
 	// ===== CONFIGURATION - EDIT THESE VALUES =====
-	const TOKEN_ADDRESS = "0x47bb061C0204Af921F43DC73C7D7768d2672DdEE";
-	const DECIMALS = 6; // Token decimals (6 for BUDDY, 18 for most tokens)
-	const MIN_TOSS_PRICE = ethers.parseUnits("100", DECIMALS); // Minimum toss amount (in token units)
-	const MAX_TOTAL_TOSS_AMOUNT = ethers.parseUnits("10000", DECIMALS); // Maximum total amount per user (in token units)
+	const TOKEN_ADDRESS = "0x7DCfFCb06B40344eecED2d1Cbf096B299fE4b405";
+	// get decimals from token contract
+	const tokenContract = await ethers.getContractAt("IERC20Metadata", TOKEN_ADDRESS);
+	if (!tokenContract) {
+		throw new Error(`❌ Could not get token contract at address: ${TOKEN_ADDRESS}`);
+	}
+	const tokenDecimals = await tokenContract.decimals();
+	const DECIMALS = tokenDecimals || 18; // Token decimals (6 for BUDDY, 18 for most tokens)
+	const MIN_TOSS_PRICE = ethers.parseUnits("0.000002", DECIMALS); // Minimum toss amount (in token units)
+	const MAX_TOTAL_TOSS_AMOUNT = ethers.parseUnits("0.0002", DECIMALS); // Maximum total amount per user (in token units)
 	
 	// Pond types to create (comment out any you don't want)
 	const PONDS_TO_CREATE = [
